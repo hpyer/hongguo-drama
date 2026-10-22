@@ -1,5 +1,7 @@
 # 第三方组件许可说明
 
+适用应用版本：红果短剧 2.5；以下第三方组件保留各自的版本与许可。
+
 本软件（红果短剧下载器）使用了以下第三方组件。各组件的版权归其各自作者所有，
 本软件对这些组件的使用均遵循其原始许可证。
 
@@ -9,7 +11,7 @@
 
 | 组件 | 版本 | 许可证 | 项目地址 |
 |---|---|---|---|
-| Electron | 44.6.0 | MIT | https://github.com/electron/electron |
+| Electron | 44.9.1 | MIT | https://github.com/electron/electron |
 | React | 18.3.1 | MIT | https://github.com/facebook/react |
 | React DOM | 18.3.1 | MIT | https://github.com/facebook/react |
 | axios | 1.20.0 | MIT | https://github.com/axios/axios |

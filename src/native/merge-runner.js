@@ -20,6 +20,22 @@ function stopMergeChildren(task) {
   }
 }
 
+async function cleanupMergeTemps(directories) {
+  for (const directory of directories) {
+    let entries;
+    try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^\.merge-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+      const temporary = path.join(directory, entry.name);
+      const children = await fs.promises.readdir(temporary, { withFileTypes: true });
+      // Only remove our flat work files, never unrelated folders or symbolic links.
+      if (children.some(child => !child.isFile() || !/^(?:\d+\.mp4|list\.ffconcat|output\.mp4)$/.test(child.name))) continue;
+      await fs.promises.rm(temporary, { recursive: true, force: true, maxRetries: 2 });
+    }
+  }
+}
+
 async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe, pickEncoder, compatible, update }) {
   Object.defineProperty(task, 'children', { value: new Set(), configurable: true });
   let temporary, lastUpdate = 0, stageStarted = Date.now();
@@ -202,4 +218,4 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
     task.elapsedSeconds = (Date.now() - task.startTime) / 1000;
   }
 }
-module.exports = { runMerge, stopMergeChildren, publishMergedOutput };
+module.exports = { runMerge, stopMergeChildren, publishMergedOutput, cleanupMergeTemps };

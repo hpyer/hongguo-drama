@@ -1,4 +1,5 @@
 ﻿@echo off
+rem Hongguo Drama 2.5 - version metadata: package.json
 chcp 65001 >nul
 cd /d "%~dp0"
 if exist "dist\win-unpacked\红果短剧.exe" (

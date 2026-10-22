@@ -133,7 +133,7 @@ export default function AppUpdateNotice() {
 
   if (!visible) return null;
   const downloading = state.status === 'downloading';
-  const downloaded = state.status === 'downloaded';
+  const downloaded = state.status === 'downloaded' || state.status === 'error' && state.downloaded === true;
   const installing = state.status === 'installing';
   const busy = pending || checking || downloading || installing || state.status === 'checking';
   const version = (downloading || downloaded || installing || state.status === 'error') ? state.version || release?.version : release?.version;

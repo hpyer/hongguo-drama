@@ -782,28 +782,29 @@ function rebuildMoov(data, moovOff, moovSize, top) {
         let esize = data.readUInt32BE(p);
         const etyp = data.subarray(p + 4, p + 8).toString('latin1');
         if (etyp === 'encv' || etyp === 'enca') {
-          const newType = etyp === 'encv' ? 'hvc1' : 'mp4a';
           const hdrSize = etyp === 'encv' ? 78 : 28;
+          const children = parseBoxes(data, p + 8 + hdrSize, p + esize);
+          let newType = 'mp4a';
+          if (etyp === 'encv') {
+            const sinf = children.find(child => child.typ === 'sinf');
+            const frma = sinf && parseBoxes(data, sinf.off + sinf.hdr, sinf.off + sinf.size).find(child => child.typ === 'frma');
+            const original = frma && frma.size === frma.hdr + 4
+              ? data.toString('latin1', frma.off + frma.hdr, frma.off + frma.hdr + 4) : null;
+            const avc = children.some(child => child.typ === 'avcC');
+            const hevc = children.some(child => child.typ === 'hvcC');
+            newType = original || (avc && !hevc ? 'avc1' : hevc && !avc ? 'hvc1' : null);
+            if (!['avc1', 'avc3', 'hvc1', 'hev1'].includes(newType)
+              || (newType.startsWith('avc') ? !avc || hevc : !hevc || avc)) {
+              throw new Error('无法确定加密视频的原始编码（codec），请更换片源重试。');
+            }
+          }
           const entry = Buffer.alloc(8 + hdrSize);
           entry.writeUInt32BE(0, 0);
           entry.write(newType, 4, 4, 'latin1');
           data.copy(entry, 8, p + 8, p + 8 + hdrSize);
 
-          let entryExtra = Buffer.alloc(0);
-          let q = p + 8 + hdrSize;
-          while (q + 8 <= p + esize) {
-            let s2 = data.readUInt32BE(q);
-            const t2 = data.subarray(q + 4, q + 8).toString('latin1');
-            if (s2 === 1) {
-              s2 = Number(data.readBigUInt64BE(q + 8));
-            } else if (s2 === 0) {
-              s2 = p + esize - q;
-            }
-            if (t2 !== 'sinf') {
-              entryExtra = Buffer.concat([entryExtra, data.subarray(q, q + s2)]);
-            }
-            q += s2;
-          }
+          const entryExtra = Buffer.concat(children.filter(child => child.typ !== 'sinf')
+            .map(child => data.subarray(child.off, child.off + child.size)));
           const fullEntry = Buffer.concat([entry, entryExtra]);
           fullEntry.writeUInt32BE(fullEntry.length, 0);
           entries.push(fullEntry);
