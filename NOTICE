@@ -102,3 +102,10 @@ code was copied. Content rights remain with their respective owners.
 Mac arm64、Mac x64、Windows x64 共用版本号；平台验证与签名状态分别记录。
 
 1.2 changes: per-series fit-window / keep-width picture modes; optional GitHub release notices without forced download or installation.
+
+十、2.4 播放、缓存与安全修复（2026-10-22）
+------------------------------------------
+离开剧库暂停并撤销迟到的自动播放意图，刷新剧库与空间统计，减少重复目录扫描。
+收紧分享链接及转码参数校验，保护活动缓存，完善退出收尾与保存恢复后的更新流程。
+适配官网播放页路径，限定 App/API 的请求头兼容回退，并升级重定向安全依赖。
+完整变更见 docs/release-2.4.md；该发行版的精确源码与媒体对应源码见 v2.4 Release。
