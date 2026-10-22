@@ -35,7 +35,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     play: async () => { plays++; media.paused = false; listeners.get('play')?.(); },
     pause: () => { pauses++; media.paused = true; listeners.get('pause')?.(); },
     addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const document = { fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
+  const document = { fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
   const stage = { addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
   const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; } };
   props.onWindowFill = value => { props.windowFill = value; };
@@ -72,6 +72,40 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   documentListeners.get('keydown')({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); render(); assert.equal(find('播放速度'), undefined);
   find('更多播放选项').props.onClick(); render(); documentListeners.get('pointerdown')({ target: {} }); render(); assert.equal(find('播放速度'), undefined);
   await find('全屏').props.onClick(); render(); assert.equal(fullscreenCalls, 1); assert.ok(find('退出全屏'));
+  props.seriesTitle = '测试剧'; props.currentIndex = 1;
+  props.episodes = [{ vid_index: 1 }, { vid_index: 2 }, { vid_index: 3, locked: true }];
+  props.onEpisodeChange = index => { props.currentIndex = index; props.source = `episode-${index}`; };
+  props.onlineQuality = 'auto'; props.supportsOnlineQuality = true;
+  props.onQualityChange = quality => { props.onlineQuality = quality; };
+  media.videoWidth = 640; media.videoHeight = 360; listeners.get('loadedmetadata')(); render();
+  const nodeText = node => typeof node === 'string' || typeof node === 'number' ? String(node) : node?.children?.map(nodeText).join('') || '';
+  assert.match(nodeText(find('当前播放信息')), /测试剧.*第 1 集/, 'fullscreen title includes series and episode');
+  find('选集').props.onClick(); render();
+  assert.ok(find('选集面板')); assert.equal(find('播放第 1 集').props['aria-current'], 'true');
+  assert.equal(find('播放第 3 集').props.disabled, true);
+  advance(); render(); assert.ok(!tree.props.className.includes('controls-hidden'), 'episode grid stays visible');
+  find('播放第 2 集').props.onClick(); render();
+  assert.equal(props.currentIndex, 2); assert.equal(find('选集面板'), undefined);
+  assert.equal(document.fullscreenElement, stage, 'episode selection preserves fullscreen node');
+  assert.match(nodeText(find('当前播放信息')), /第 2 集/);
+  find('清晰度').props.onClick(); render();
+  assert.match(nodeText(find('清晰度面板')), /360P.*640.*360/);
+  assert.match(nodeText(find('清晰度面板')), /网页.*上限.*上游/);
+  assert.match(nodeText(find('清晰度面板')), /未自动降级|不会自动降级/);
+  find('选择 1080P').props.onClick(); render(); assert.equal(props.onlineQuality, '1080p');
+  find('清晰度').props.onClick(); render();
+  assert.equal(find('选择 1080P').props['aria-pressed'], true);
+  find('选集').props.onClick(); render(); assert.equal(find('清晰度面板'), undefined);
+  documentListeners.get('keydown')({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); render();
+  assert.equal(find('选集面板'), undefined);
+  find('清晰度').props.onClick(); render();
+  documentListeners.get('pointerdown')({ target: {} }); render(); assert.equal(find('清晰度面板'), undefined);
+  props.supportsOnlineQuality = false; props.onlineQuality = 'auto'; render();
+  find('清晰度').props.onClick(); render(); assert.equal(find('选择 1080P'), undefined);
+  assert.match(nodeText(find('清晰度面板')), /由片源决定/);
+  find('更多播放选项').props.onClick(); render(); assert.equal(find('清晰度面板'), undefined);
+  documentListeners.get('keydown')({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); render();
+  props.supportsOnlineQuality = true; render();
   await find('播放').props.onClick(); render(); advance(); render();
   const hidden = () => tree.props.className.includes('controls-hidden');
   let pointerX = 100;
@@ -200,6 +234,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   keyboardFocus = true; stageListeners.get('focusin')({ target: find('暂停') }); advance(); render(); assert.ok(!hidden(), 'keyboard focus remains visible');
   keyboardFocus = false; stageListeners.get('focusout')(); advance(); render(); assert.ok(hidden());
   await find('退出全屏').props.onClick(); render(); render(); assert.equal(document.fullscreenElement, null);
+  assert.equal(find('当前播放信息'), undefined, 'fullscreen title leaves with fullscreen');
   advance(); render(); assert.ok(hidden(), 'normal landscape must hide idle controls after exiting fullscreen');
   movePointer(); assert.ok(!hidden(), 'normal landscape movement reveals controls');
   windowListeners.get('blur')(); advance(); render(); assert.ok(hidden(), 'normal landscape hides with the pointer outside the app');
@@ -250,6 +285,18 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   cleanups.forEach(fn => fn?.()); assert.equal(listeners.size, 0); assert.equal(documentListeners.size, 0); assert.equal(stageListeners.size, 0); assert.equal(windowListeners.size, 0); assert.equal(timers.size, 0);
   const { mount } = require('./check-player-resume.cjs');
   const controls = ui => ui.find(node => node.props.onRateChange && node.props.videoRef);
+  const qualityUi = mount({ local: true, settings: { cache_next_episode: false } });
+  await qualityUi.flush(); qualityUi.metadata(); qualityUi.media.currentTime = 41; qualityUi.media.paused = true;
+  assert.equal(controls(qualityUi).props.seriesTitle, '测试剧');
+  assert.equal(controls(qualityUi).props.episodes.length, 2);
+  controls(qualityUi).props.onQualityChange('1080p'); await qualityUi.flush(); qualityUi.metadata();
+  assert.equal(qualityUi.prepares.at(-1).quality, '1080p');
+  assert.equal(qualityUi.media.currentTime, 41, 'control-bar quality action preserves current time');
+  assert.equal(qualityUi.media.paused, true, 'control-bar quality action preserves pause');
+  controls(qualityUi).props.onEpisodeChange(2); await qualityUi.flush();
+  assert.equal(controls(qualityUi).props.currentIndex, 2);
+  assert.equal(qualityUi.prepares.at(-1).quality, '1080p', 'floating episode action keeps selected quality');
+  qualityUi.unmount();
   for (const local of [true, false]) {
     let finishNext;
     const ui = mount({ local, props: { setEpisodesOpen() {}, target: { seriesId: 'A', vidIndex: 1, ts: 1 } }, prepare: p => p.vidIndex === 1 ? { success: true, url: 'mock:first' } : new Promise(resolve => { finishNext = resolve; }) });

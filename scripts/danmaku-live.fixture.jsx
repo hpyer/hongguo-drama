@@ -1,29 +1,31 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import CommentDanmaku from '../src/components/CommentDanmaku.jsx';
+import PlayerControls from '../src/components/PlayerControls.jsx';
 import { createCommentFeed, DEFAULT_DANMAKU_SETTINGS } from '../src/components/danmakuModel.mjs';
 
 window.IS_REACT_ACT_ENVIRONMENT = true;
 window.testResult = (async () => {
   const assert = (value, message) => { if (!value) throw Error(message); };
   const root = createRoot(document.getElementById('root'));
-  const video = Object.assign(new EventTarget(), { paused: false, ended: false, seeking: false, readyState: 4, playbackRate: 1 });
-  const videoRef = { current: video }, feed = createCommentFeed('123456', '654321');
+  const video = Object.assign(new EventTarget(), { paused: false, ended: false, seeking: false, readyState: 4, playbackRate: 1, currentTime: 0, duration: 120, volume: 1, muted: false });
+  const videoRef = { current: video }, stageRef = { current: null }, feed = createCommentFeed('123456', '654321');
   feed.comments = Array.from({ length: 30 }, (_, i) => ({ content: `评论${i}：测试屏上内容保持原位` }));
   let settings = { ...DEFAULT_DANMAKU_SETTINGS, area: 'full', density: 'dense' };
   let now = 1000, serial = 0;
   const frames = new Map();
   window.requestAnimationFrame = callback => { frames.set(++serial, callback); return serial; };
   window.cancelAnimationFrame = id => frames.delete(id);
-  const render = (status = {}) => act(async () => root.render(<div style={{ position: 'relative', width: 800, height: 600 }}>
+  const render = (status = {}) => act(async () => root.render(<div ref={stageRef} style={{ position: 'relative', width: 800, height: 600 }}>
     <CommentDanmaku videoRef={videoRef} source="fixture" available danmaku={{ running: true, settings, comments: feed.comments, feed, ...status }} />
+    <PlayerControls videoRef={videoRef} stageRef={stageRef} source="fixture" available rate={1} onRateChange={() => {}} />
   </div>));
   const advance = async count => { for (let i = 0; i < count; i++) await act(async () => {
     now += 100; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(now));
   }); };
   // The fixture omits application CSS; supply only the real overlay's geometry.
   const style = document.createElement('style');
-  style.textContent = '.comment-danmaku{position:absolute;inset:0}.comment-danmaku-item{position:absolute;white-space:nowrap;line-height:1.25}';
+  style.textContent = '.comment-danmaku,.player-controls{position:absolute;inset:0}.player-controls-bar{position:absolute;inset:auto 0 0;height:80px}.comment-danmaku-item{position:absolute;white-space:nowrap;line-height:1.25}';
   document.head.append(style);
   const snapshot = () => feed.animation.items.map(item => ({ ...item, node: [...document.querySelectorAll('.comment-danmaku-item')].find(node => node.textContent === item.text) }));
   try {
@@ -39,7 +41,7 @@ window.testResult = (async () => {
     await render(); await advance(34);
     await act(async () => { video.paused = true; video.dispatchEvent(new Event('pause')); });
     const before = snapshot(), cursor = feed.animation.cursor;
-    assert(before.length >= 3, 'Fixture must have several live comments');
+    assert(before.length >= 3, 'Full-stage controls overlay must preserve multiple danmaku lanes above the bottom bar');
     for (const patch of [{ opacity: 35 }, { fontSize: 32 }, { speed: 2 }, { area: 'quarter' }, { density: 'sparse' }]) {
       settings = { ...settings, ...patch }; await render();
       const after = snapshot();

@@ -99,7 +99,7 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
     let previous = 0;
     let width = layer.clientWidth;
     let height = layer.clientHeight;
-    const controls = layer.parentElement?.querySelector('.player-controls');
+    const controls = layer.parentElement?.querySelector('.player-controls-bar');
     const options = () => ({ width, height, settings, reducedMotion, bottomInset: Math.max(76, (controls?.clientHeight || 0) + 8) });
     const reset = () => {
       state.items = [];

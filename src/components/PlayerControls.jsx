@@ -11,11 +11,16 @@ const formatTime = seconds => {
 };
 const Icon = ({ children }) => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>;
 
-export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAULT_SHORTCUTS, onToggleFullscreen, videoRef, stageRef, source, available, continuing = false, autoContinue = false, rate, onRateChange, onError, pictureMode = 'fit', onPictureModeChange, portrait = false, windowFill = false, onWindowFill }) {
+export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAULT_SHORTCUTS, onToggleFullscreen, videoRef, stageRef, source, available, continuing = false, autoContinue = false, rate, onRateChange, onError, pictureMode = 'fit', onPictureModeChange, portrait = false, windowFill = false, onWindowFill, seriesTitle = '', episodes = [], currentIndex, onEpisodeChange, onlineQuality = 'auto', supportsOnlineQuality = false, onQualityChange }) {
   const [media, setMedia] = useState({ paused: true, ended: false, time: 0, duration: 0, muted: false, volume: 1 });
   const [fullscreen, setFullscreen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [danmakuOpen, setDanmakuOpen] = useState(false);
+  const [selectionPanel, setSelectionPanel] = useState(null);
+  const selectionRef = useRef(null);
+  const episodeButtonRef = useRef(null);
+  const qualityButtonRef = useRef(null);
+  const [selectionHeight, setSelectionHeight] = useState(360);
   const danmakuPanelRef = useRef(null);
   const danmakuButtonRef = useRef(null);
   const [danmakuHeight, setDanmakuHeight] = useState(300);
@@ -56,11 +61,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     let pauseTimer;
     let dragging = false;
     const hide = () => {
-      if (available && !media.paused && !menuOpen && !danmakuOpen && !dragging && !controlsRef.current?.querySelector(':focus-visible')) setControlsHidden(true);
+      if (available && !media.paused && !menuOpen && !danmakuOpen && !selectionPanel && !dragging && !controlsRef.current?.querySelector(':focus-visible')) setControlsHidden(true);
     };
     const scheduleHide = () => {
       clearTimeout(timer);
-      if (available && !media.paused && !menuOpen && !danmakuOpen && !dragging) {
+      if (available && !media.paused && !menuOpen && !danmakuOpen && !selectionPanel && !dragging) {
         timer = setTimeout(hide, 2000);
       }
     };
@@ -104,7 +109,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     const onBlur = () => { episodeKeysRef.current.clear(); stopDrag(); onPointerLeave(); };
     window.addEventListener('blur', onBlur);
     // Source changes and automatic handoffs are not user activity.
-    if (menuOpen || danmakuOpen || (!continuing && !available)) reveal();
+    if (menuOpen || danmakuOpen || selectionPanel || (!continuing && !available)) reveal();
     else if (!continuing && media.paused && !(media.ended && autoContinue)) {
       // A native pause can precede ended; explicit key/click pauses already reveal immediately.
       if (autoContinue && controlsHidden) pauseTimer = setTimeout(() => {
@@ -126,16 +131,18 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
       window.removeEventListener('pointercancel', stopDrag);
       window.removeEventListener('blur', onBlur);
     };
-  }, [portrait, expanded, available, media.paused, media.ended, continuing, autoContinue, menuOpen, danmakuOpen, source, stageRef, shortcuts]);
+  }, [portrait, expanded, available, media.paused, media.ended, continuing, autoContinue, menuOpen, danmakuOpen, selectionPanel, source, stageRef, shortcuts]);
 
   useEffect(() => {
     setMenuOpen(false);
     setDanmakuOpen(false);
+    setSelectionPanel(null);
     const video = videoRef.current;
     if (!video) return;
     const sync = () => setMedia({ paused: video.paused, ended: video.ended, time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
-      duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0, muted: video.muted, volume: video.volume });
-    const events = ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'durationchange', 'volumechange', 'emptied'];
+      duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0, muted: video.muted, volume: video.volume,
+      width: available ? video.videoWidth : 0, height: available ? video.videoHeight : 0 });
+    const events = ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'durationchange', 'volumechange', 'emptied', 'resize'];
     events.forEach(name => video.addEventListener(name, sync));
     sync();
     return () => events.forEach(name => video.removeEventListener(name, sync));
@@ -180,6 +187,43 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     return () => { observer.disconnect(); document.removeEventListener('pointerdown', outside); };
   }, [danmakuOpen, stageRef]);
 
+  useEffect(() => {
+    if (!selectionPanel) return;
+    const selected = selectionRef.current?.querySelector('[aria-current="true"], [aria-pressed="true"]');
+    selected?.focus({ preventScroll: true });
+    selected?.scrollIntoView({ block: 'nearest' });
+    const measure = () => {
+      const stage = stageRef.current?.getBoundingClientRect?.();
+      const controls = controlsRef.current?.getBoundingClientRect?.();
+      if (stage && controls) setSelectionHeight(Math.max(60, Math.min(440, controls.top - stage.top - 16)));
+    };
+    const outside = event => { if (!selectionRef.current?.contains(event.target)) setSelectionPanel(null); };
+    const escape = event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation();
+      setSelectionPanel(null);
+      (selectionPanel === 'episodes' ? episodeButtonRef : qualityButtonRef).current?.focus();
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (stageRef.current) observer?.observe(stageRef.current);
+    if (controlsRef.current) observer?.observe(controlsRef.current);
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+      window.removeEventListener('resize', measure);
+    };
+  }, [selectionPanel, expanded, stageRef]);
+
+  const toggleSelection = panel => {
+    setMenuOpen(false); setDanmakuOpen(false);
+    setSelectionPanel(open => open === panel ? null : panel);
+  };
+
   const closeDanmaku = () => { setDanmakuOpen(false); danmakuButtonRef.current?.focus(); };
 
   const togglePlay = async () => {
@@ -202,7 +246,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   };
 
   return (
-    <div ref={controlsRef} className={`player-controls ${controlsHidden ? 'controls-hidden' : ''}`} role="group" aria-label="视频播放控制">
+    <div className={`player-controls ${controlsHidden ? 'controls-hidden' : ''}`} role="group" aria-label="视频播放控制">
+      {expanded && seriesTitle && <div className="player-now-playing" aria-label="当前播放信息">
+        <strong title={seriesTitle}>{seriesTitle}</strong><span>第 {currentIndex} 集</span>
+      </div>}
+      <div ref={controlsRef} className="player-controls-bar">
       <input className="player-controls-seek" type="range" aria-label="播放进度" aria-valuetext={`${formatTime(media.time)} / ${formatTime(media.duration)}`} min="0" max={media.duration || 0} step="0.1" value={Math.min(media.time, media.duration)} disabled={!available || !media.duration} onChange={seek} />
       <div className="player-controls-row">
         <button type="button" data-player-control aria-label={media.paused ? '播放' : '暂停'} title={`播放/暂停（${formatShortcut(shortcuts.play)}）`} disabled={!available} onClick={togglePlay}>{media.paused ? <Play size={18} /> : <Pause size={18} />}</button>
@@ -211,11 +259,38 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
           <button type="button" data-player-menu className={`danmaku-icon-button ${danmaku.enabled ? 'danmaku-enabled' : ''}`} aria-label={danmaku.enabled ? '关闭评论弹幕' : '开启评论弹幕'} aria-pressed={danmaku.enabled}
             title={danmaku.supported ? '将当前集公开评论显示在画面上' : '仅红果来源的当前集支持评论弹幕'} disabled={!danmaku.supported} onClick={danmaku.toggle}><span className="danmaku-symbol" aria-hidden="true">弹<span className="danmaku-state-mark" /></span></button>
           <button type="button" data-player-menu className="danmaku-icon-button" ref={danmakuButtonRef} aria-label="弹幕设置" title="评论弹幕设置" aria-haspopup="dialog" aria-expanded={danmakuOpen}
-            onClick={() => { setMenuOpen(false); setDanmakuOpen(open => !open); }}>
+            onClick={() => { setMenuOpen(false); setSelectionPanel(null); setDanmakuOpen(open => !open); }}>
             <span className="danmaku-symbol" aria-hidden="true">弹<span className="danmaku-settings-mark"><SettingsIcon size={10} /></span></span>
           </button>
           {danmakuOpen && <DanmakuSettings danmaku={danmaku} onClose={closeDanmaku} panelRef={danmakuPanelRef} maxHeight={danmakuHeight} />}
         </div>}
+        <div className="player-controls-selection" data-player-menu ref={selectionRef}>
+          {!!episodes.length && <button type="button" ref={episodeButtonRef} aria-label="选集" aria-haspopup="dialog" aria-expanded={selectionPanel === 'episodes'}
+            onClick={() => toggleSelection('episodes')}>选集</button>}
+          {onQualityChange && <button type="button" ref={qualityButtonRef} aria-label="清晰度" aria-haspopup="dialog" aria-expanded={selectionPanel === 'quality'}
+            onClick={() => toggleSelection('quality')}>{onlineQuality === 'auto' ? (media.width > 0 && media.height > 0 ? `${Math.min(media.width, media.height)}P` : '自动') : onlineQuality.toUpperCase()}</button>}
+          {selectionPanel === 'episodes' && <div className="player-controls-popover player-episode-popover" role="dialog" aria-label="选集面板" style={{ maxHeight: selectionHeight }}>
+            <div className="player-popover-heading"><strong>选集</strong><span>第 {currentIndex} 集 / 共 {episodes.length} 集</span></div>
+            <div className="player-episode-grid">
+              {episodes.map(episode => <button type="button" key={episode.vid_index} aria-label={`播放第 ${episode.vid_index} 集`} aria-current={episode.vid_index === currentIndex ? 'true' : undefined}
+                disabled={episode.locked} title={episode.locked ? '来源未开放本集' : `播放第 ${episode.vid_index} 集`}
+                onClick={() => { setSelectionPanel(null); episodeButtonRef.current?.focus(); onEpisodeChange(episode.vid_index); }}>
+                {episode.vid_index}{episode.locked && <small>未开放</small>}
+              </button>)}
+            </div>
+          </div>}
+          {selectionPanel === 'quality' && <div className="player-controls-popover player-quality-popover" role="dialog" aria-label="清晰度面板" style={{ maxHeight: selectionHeight }}>
+            <div className="player-popover-heading"><strong>清晰度</strong></div>
+            <p className="player-quality-current">当前画面：{media.width > 0 && media.height > 0 ? `${Math.min(media.width, media.height)}P（${media.width} × ${media.height}）` : '等待视频信息'}</p>
+            <div role="group" aria-label="选择播放清晰度">
+              {(supportsOnlineQuality ? ['auto', '720p', '1080p'] : ['auto']).map(quality => <button type="button" key={quality} aria-label={`选择 ${quality === 'auto' ? '自动' : quality.toUpperCase()}`}
+                aria-pressed={onlineQuality === quality} onClick={() => { setSelectionPanel(null); qualityButtonRef.current?.focus(); if (quality !== onlineQuality) onQualityChange(quality); }}>
+                <span>{quality === 'auto' ? (supportsOnlineQuality ? '自动（兼容优先）' : '由片源决定') : quality.toUpperCase()}</span><span aria-hidden="true">{onlineQuality === quality ? '✓' : ''}</span>
+              </button>)}
+            </div>
+            <p className="player-quality-hint">{supportsOnlineQuality ? '网页片源清晰度上限由上游决定，自动模式可能仅有低清画面。720P / 1080P 使用 App/API 片源；不可用会提示，不会自动降级。切换后保留播放进度。' : '此来源的清晰度由片源决定，暂不支持指定画质。当前画面分辨率不代表来源的最高画质。'}</p>
+          </div>}
+        </div>
         <div className="player-controls-volume">
           <button type="button" data-player-control aria-label={media.muted ? '取消静音' : '静音'} onClick={() => { const video = videoRef.current; if (video) video.muted = !video.muted; }}>
             <Icon><path d="M11 5 6 9H3v6h3l5 4Z" />{media.muted ? <path d="m16 9 5 6m0-6-5 6" /> : <path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />}</Icon>
@@ -227,7 +302,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
         </button>
         <button type="button" data-player-control className="player-controls-rate" aria-label="增加播放速度" title={`播放速度 ${rate}×，点击增加 0.25 倍，4 倍后回到 1 倍`} onClick={() => onRateChange(rate >= 4 ? 1 : Math.min(4, rate + 0.25))}>{rate}×</button>
         <div className="player-controls-options" data-player-menu ref={menuRef}>
-          <button type="button" ref={menuButtonRef} aria-label="更多播放选项" title="更多播放选项" aria-haspopup="dialog" aria-expanded={menuOpen} onClick={() => { setDanmakuOpen(false); setMenuOpen(open => !open); }}>
+          <button type="button" ref={menuButtonRef} aria-label="更多播放选项" title="更多播放选项" aria-haspopup="dialog" aria-expanded={menuOpen} onClick={() => { setDanmakuOpen(false); setSelectionPanel(null); setMenuOpen(open => !open); }}>
             <Icon><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" /></Icon>
           </button>
           {menuOpen && <div className="player-controls-menu" style={{ maxHeight: menuHeight }} role="dialog" aria-label="播放选项">
@@ -243,6 +318,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
             {SHORTCUT_ACTIONS.map(action => <span key={action.id}>{formatShortcut(shortcuts[action.id])}：{action.label}</span>)}
           </div>}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -623,7 +623,7 @@
 .layout-portrait .player-now-sub { flex-basis: 100%; }
 .layout-portrait .player-episodes { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; gap: 6px; }
 .layout-portrait .player-tips { font-size: 10px; margin-block: 10px; }
-.layout-portrait .player-stage:not(:fullscreen) .player-controls { padding: 20px 8px 8px; }
+.layout-portrait .player-stage:not(:fullscreen) .player-controls-bar { padding: 20px 8px 8px; }
 .layout-portrait .player-stage:not(:fullscreen) .player-controls-row { flex-wrap: wrap; gap: 3px; }
 .layout-portrait .player-stage:not(:fullscreen) .player-controls-volume input { width: 42px; }
 .layout-portrait .player-stage:not(:fullscreen) .player-controls-time { flex: 1; }
