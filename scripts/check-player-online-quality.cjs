@@ -12,12 +12,14 @@ async function check(name, fn) { try { await fn(); console.log('PASS ' + name); 
 if (process.argv[2] !== 'main') {
   await check('scheduled source retry stays waiting and terminal error remains visible', async () => {
     let status = 'missing', retryAt = null, error = '';
+    let failed;
     const ui = mount({ props: {target:{seriesId:'A',vidIndex:1,ts:1}}, prepare: async()=>({success:false,error:'取源失败'}),
-      apiOverrides: { getSeriesEpisodes: async()=>({success:true,data:{series_id:'A',episodes:[{vid:'v1',vid_index:1,status,retryAt,error}]}}),
+      apiOverrides: { onDownloadFailed: fn => { failed = fn; return () => {}; },
+        getSeriesEpisodes: async()=>({success:true,data:{series_id:'A',episodes:[{vid:'v1',vid_index:1,status,retryAt,error}]}}),
         downloadSingleEpisode: async()=>{status='pending';return {success:true};} } });
-    await ui.flush(); status='failed'; retryAt=Date.now()+5000; error='官网限流，等待自动重试'; await poll(ui);
+    await ui.flush(); status='failed'; retryAt=Date.now()+5000; error='官网限流，等待自动重试'; failed?.({id:'t1'}); await poll(ui);
     assert(ui.button('取消等待'), 'scheduled retry must retain playback intent');
-    retryAt=null; error='当前片源没有 1080P，未自动降级'; await poll(ui);
+    retryAt=null; error='当前片源没有 1080P，未自动降级'; failed?.({id:'t1'}); await poll(ui);
     assert.equal(ui.button('取消等待'),undefined); assert.match(text(alert(ui)),/当前片源没有 1080P/); ui.unmount();
   });
   await check('online selection preserves time through prefetch, reconnect, transcode and episode switch', async()=>{

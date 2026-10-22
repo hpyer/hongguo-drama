@@ -4,13 +4,15 @@ const { mount } = require('./check-player-resume.cjs');
 const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const source = ui => ui.find(n => n.type === 'video').props.src;
 const alert = ui => ui.find(n => n.props.role === 'alert');
-const poll = async ui => { await [...ui.timers.values()].find(t => t.delay === 2000).fn(); await ui.flush(); };
+const poll = async ui => { ui.changed(); await [...ui.timers.values()].find(t => t.delay === 2000).fn(); await ui.flush(); };
 function fixture({ prepare, transcode, enqueue, quality = '720p', initial = 'missing' } = {}) {
   const states = new Map([['A:1', initial]]), downloads = [], stops = [];
+  let changed;
   const props = { target: { seriesId: 'A', vidIndex: 1, ts: 1 } };
   const ui = mount({ props, transcode, prepare: prepare || (async () => ({ success: false, error: '本集取源失败' })),
     settings: { download_quality: quality, cache_next_episode: false },
     apiOverrides: {
+      onDownloadQueueChanged: fn => { changed = fn; return () => {}; },
       getSeriesList: async () => [{ series_id: 'A' }, { series_id: 'B' }],
       getSeriesEpisodes: async sid => ({ success: true, data: { series_id: sid, total: 2,
         episodes: [1, 2].map(index => { const status = states.get(`${sid}:${index}`) || 'missing'; return {
@@ -27,6 +29,7 @@ function fixture({ prepare, transcode, enqueue, quality = '720p', initial = 'mis
       stopDownload: async id => { stops.push(id); return { success: true }; },
     },
   });
+  ui.changed = () => changed?.();
   return { ui, states, downloads, stops };
 }
 
@@ -47,9 +50,11 @@ function fixture({ prepare, transcode, enqueue, quality = '720p', initial = 'mis
     assert.equal(source(f.ui), 'file:///A-1.mp4'); assert.equal(f.ui.media.paused, false); assert.equal(alert(f.ui), undefined);
     f.ui.unmount();
   });
-  await test('independent completion clears a prior error even after enqueue failed', async () => {
+  await test('enqueue failure revokes autoplay until an explicit retry', async () => {
     const f = fixture({ enqueue: async () => ({ success: false, error: '下载加入失败' }) }); await f.ui.flush();
     assert(alert(f.ui)); f.states.set('A:1', 'completed'); await poll(f.ui);
+    assert.notEqual(source(f.ui), 'file:///A-1.mp4'); assert(alert(f.ui));
+    await f.ui.button('重试本集').props.onClick(); await f.ui.flush();
     assert.equal(source(f.ui), 'file:///A-1.mp4'); assert.equal(alert(f.ui), undefined); f.ui.unmount();
   });
   await test('retry uses refreshed local instead of a stale online choice', async () => {
@@ -61,6 +66,8 @@ function fixture({ prepare, transcode, enqueue, quality = '720p', initial = 'mis
     const f = fixture(); await f.ui.flush(); assert.equal(f.downloads.length, 1);
     f.states.set('A:1', status); await poll(f.ui);
     assert(alert(f.ui)); assert.equal(f.ui.button('取消等待'), undefined);
+    f.states.set('A:1', 'completed'); await poll(f.ui);
+    assert.notEqual(source(f.ui), 'file:///A-1.mp4', 'terminal failure must revoke its playback intent');
     await f.ui.button('重试本集').props.onClick(); await f.ui.flush(); await poll(f.ui);
     assert.equal(f.downloads.length, 1, 'retry must not continuously requeue failed downloads'); f.ui.unmount();
   });

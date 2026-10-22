@@ -48,11 +48,13 @@ let appUpdateInstaller = null;
 let appUpdater = null;
 let updateDownloadGeneration = 0;
 let pendingUpdateOperations = 0;
+let quitCleanup = null;
 const UPDATE_BLOCKED_CHANNELS = new Set(['hongguo-download-batch', 'download-single-episode', 'retry-task', 'retry-tasks', 'resume-all', 'merge-series', 'transcode-for-playback', 'prepare-online-play', 'save-settings']);
 const ipcMain = {
   handle(channel, handler) {
     rawIpcMain.handle(channel, async (event, ...args) => {
       if (!rendererSecurity.isTrustedSender(event, mainWindow)) throw new Error('窗口请求无效');
+      if (quitCleanup) return { success: false, error: '正在退出，请等待清理完成。' };
       if (appUpdateInstaller?.getState().status === 'installing' && UPDATE_BLOCKED_CHANNELS.has(channel)) {
         return { success: false, error: '正在安装更新，请等待应用重新启动。' };
       }
@@ -1389,6 +1391,7 @@ ipcMain.handle('dismissed-count', async () => seriesRegistry.filter((s) => s.dis
 
 // ===== 一键合并（ffmpeg concat 流复制，无损且快）=====
 let mergeTasks = []; // { id, seriesId, seriesTitle, status, progress, output, total, done, error }
+const mergeRuns = new Map();
 
 function resolveFfmpeg(name) {
   const executable = process.platform === 'win32' ? `${name}.exe` : name;
@@ -1689,7 +1692,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     if (!saveMergeTasks()) { mergeTasks = mergeTasks.filter(t => t.id !== id); return { success: false, error: '无法保存合并任务，请检查存储错误提示后重试' }; }
     sendToRenderer('merge-task-added', { ...task });
     const { runMerge } = require('./src/native/merge-runner');
-    (async () => {
+    const run = (async () => {
       try {
         await runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe: probeVideoInfo,
           pickEncoder: pickH264Encoder, compatible: !!options?.compatible,
@@ -1703,7 +1706,8 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
         if (!saveMergeTasks()) task.storageWarning = '合并记录未保存，导出文件状态请以磁盘为准';
         sendToRenderer(task.status === 'completed' ? 'merge-completed' : 'merge-failed', { id, path: output, error: task.error, verified: task.verified, storageWarning: task.storageWarning });
       }
-    })().catch(error => console.error('[Merge] 任务通知失败:', error.message));
+    })().catch(error => console.error('[Merge] 任务通知失败:', error.message)).finally(() => mergeRuns.delete(id));
+    mergeRuns.set(id, run);
     return { success: true, id, output, outputName: task.outputName, count: ordered.length, totalBytes, totalDuration: 0, codecWarning: '' };
   } catch (error) { return { success: false, error: error.message }; }
 });
@@ -1951,7 +1955,7 @@ async function requestMedia(playInfo, options = {}) {
       const retryable = web ? [404, 410].includes(status) || status >= 500 && status <= 599 : status === 403;
       if (!cancelled && attempt === 0 && retryable) {
         if (['app', 'api'].includes(playInfo.source) && config.headers.Referer) delete config.headers.Referer;
-        else if (!web && !config.headers.Referer) config.headers.Referer = hongguo.VIDEO_REFERER;
+        else if (['app', 'api'].includes(playInfo.source) && !config.headers.Referer) config.headers.Referer = hongguo.VIDEO_REFERER;
         continue;
       }
       if (!cancelled && config.method === 'GET' && (retryable || status === 403)) hongguo.markWebMediaFailure?.(playInfo);
@@ -2454,12 +2458,22 @@ function getCompatDir() {
   if (!compatDir) {
     compatDir = path.join(app.getPath('userData'), 'compat-cache');
     try { fs.mkdirSync(compatDir, { recursive: true }); } catch (_) {}
+    // No jobs have used this directory yet; remove leftovers from an interrupted run.
+    try {
+      for (const name of fs.readdirSync(compatDir)) {
+        if ((name.startsWith('.tmp_') && name.endsWith('.mp4')) || name.endsWith('.mp4.part')) {
+          try { fs.unlinkSync(path.join(compatDir, name)); } catch (_) {}
+        }
+      }
+    } catch (_) {}
   }
   return compatDir;
 }
 
 function compatFileName(seriesId, vidIndex, quality = 'auto') {
-  return `${sanitizeFolderName(String(seriesId))}_${String(vidIndex).padStart(3, '0')}${quality === 'auto' ? '' : `_${playbackQuality(quality)}`}.mp4`;
+  if (!['string', 'number'].includes(typeof vidIndex) || !/^[1-9]\d*$/.test(String(vidIndex))
+    || !Number.isSafeInteger(Number(vidIndex))) throw new Error('集数必须是有效正整数');
+  return `${sanitizeFolderName(String(seriesId))}_${String(Number(vidIndex)).padStart(3, '0')}${quality === 'auto' ? '' : `_${playbackQuality(quality)}`}.mp4`;
 }
 
 function compatPathFor(seriesId, vidIndex, quality = 'auto') {
@@ -2472,19 +2486,24 @@ function compatCacheStatus() {
   let bytes = 0;
   try {
     for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.mp4')) continue;
+      if (!f.endsWith('.mp4') || f.startsWith('.tmp_')) continue;
       try { bytes += fs.statSync(path.join(dir, f)).size; files++; } catch (_) {}
     }
   } catch (_) {}
   return { dir, files, bytes };
 }
 
-function trimCompatCache() {
+function trimCompatCache(currentOutput) {
   const dir = getCompatDir();
+  const protectedFiles = new Set([currentOutput]);
+  for (const [output, job] of compatPreparing) {
+    protectedFiles.add(output);
+    for (const file of job.files || []) protectedFiles.add(file);
+  }
   let entries = [];
   try {
     entries = fs.readdirSync(dir)
-      .filter((f) => f.endsWith('.mp4'))
+      .filter((f) => f.endsWith('.mp4') && !f.startsWith('.tmp_'))
       .map((f) => {
         const p = path.join(dir, f);
         const st = fs.statSync(p);
@@ -2496,6 +2515,7 @@ function trimCompatCache() {
   entries.sort((a, b) => a.at - b.at); // 最早访问的先删
   for (const e of entries) {
     if (total <= COMPAT_MAX_BYTES) break;
+    if (protectedFiles.has(e.p)) continue;
     try { fs.unlinkSync(e.p); total -= e.size; } catch (_) {}
   }
 }
@@ -2560,9 +2580,9 @@ function cancelCompatJob(job) {
 }
 ipcMain.handle('cancel-transcode-for-playback', async (_event, payload = {}) => {
   if (!payload.seriesId || payload.vidIndex == null) return { success: false };
-  let quality;
-  try { quality = playbackQuality(payload.quality, payload.vid || payload.seriesId); } catch (error) { return { success: false, error: error.message }; }
-  const key = compatPathFor(payload.seriesId, payload.vidIndex, quality);
+  let key;
+  try { key = compatPathFor(payload.seriesId, payload.vidIndex, playbackQuality(payload.quality, payload.vid || payload.seriesId)); }
+  catch (error) { return { success: false, error: error.message }; }
   const request = payload.requestId ? compatRequests.get(String(payload.requestId)) : null;
   // An old request must never fall back to cancelling the newest job for this episode.
   if (payload.requestId && (!request || request.key !== key)) return { success: true };
@@ -2576,9 +2596,9 @@ ipcMain.handle('cancel-transcode-for-playback', async (_event, payload = {}) => 
 });
 ipcMain.handle('transcode-for-playback', async (event, payload = {}) => {
   if (!payload.seriesId || payload.vidIndex == null) return { success: false, error: '缺少剧集信息' };
-  let quality;
-  try { quality = playbackQuality(payload.quality, payload.vid || payload.seriesId); } catch (error) { return { success: false, error: error.message }; }
-  const key = compatPathFor(payload.seriesId, payload.vidIndex, quality);
+  let key;
+  try { key = compatPathFor(payload.seriesId, payload.vidIndex, playbackQuality(payload.quality, payload.vid || payload.seriesId)); }
+  catch (error) { return { success: false, error: error.message }; }
   const requestId = String(payload.requestId || randomUUID());
   const existing = compatRequests.get(requestId);
   if (existing) return existing.key === key ? existing.promise : { success: false, error: '请求标识已用于其他剧集' };
@@ -2587,7 +2607,7 @@ ipcMain.handle('transcode-for-playback', async (event, payload = {}) => {
   let job = previous;
   if (job && !job.cancelled && job.sourceVid !== String(payload.vid || '')) return { success: false, error: '该集已有不同来源的准备请求，请稍后重试' };
   if (!job || job.cancelled) {
-    job = { controller: new AbortController(), cancelled: false, requests: new Map(), sourceVid: String(payload.vid || '') };
+    job = { controller: new AbortController(), cancelled: false, requests: new Map(), files: new Set(), sourceVid: String(payload.vid || '') };
     const clearing = compatClearing;
     job.promise = Promise.resolve().then(async () => {
       if (previous) await previous.promise;
@@ -2633,6 +2653,9 @@ async function transcodeForPlayback(payload, job = { controller: new AbortContro
     const { seriesId, vidIndex, filePath, force } = payload || {};
     const quality = playbackQuality(payload.quality, payload.vid || seriesId);
     if (!seriesId || vidIndex == null) return { success: false, error: '缺少剧集信息' };
+    const out = compatPathFor(seriesId, vidIndex, quality);
+    job.files ||= new Set();
+    if (filePath) job.files.add(filePath);
     if (filePath && fs.existsSync(filePath) && !isInsideMediaRoot(filePath) && !isRecordedMediaFile(filePath, payload)) {
       return { success: false, error: '只能转码下载目录中的视频' };
     }
@@ -2644,7 +2667,6 @@ async function transcodeForPlayback(payload, job = { controller: new AbortContro
       if (episode.locked) return { success: false, error: '该集已锁定，请在来源平台解锁' };
     }
 
-    const out = compatPathFor(seriesId, vidIndex, quality);
     if (!force && fs.existsSync(out) && fs.statSync(out).size > 1024 * 100) {
       // 命中缓存
       try { fs.utimesSync(out, new Date(), new Date()); } catch (_) {}
@@ -2766,7 +2788,7 @@ async function transcodeForPlayback(payload, job = { controller: new AbortContro
     }
 
     fs.renameSync(tmpOut, out);
-    trimCompatCache();
+    trimCompatCache(out);
     const size = fs.statSync(out).size;
     const elapsed = ((Date.now() - started) / 1000).toFixed(1);
     console.log(`[Compat] 完成 ${(size / 1048576).toFixed(1)}MB  用时 ${elapsed}s`);
@@ -3252,6 +3274,7 @@ function removeTaskFile(task) {
 }
 
 async function stopTaskAndWait(task) {
+  clearSourceRetry(task);
   task.cancelled = true;
   task.cancelSource?.cancel('用户删除任务');
   task.writer?.destroy();
@@ -3894,6 +3917,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     try { rebuildSeriesRegistryFromTasks(); } catch (_) { /* storage-error reports the failed write when the window opens. */ }
     // 外置盘或网络盘可能阻塞同步扫描；分集访问按需查找，下载管理保留手动补登记。
     loadMergeTasks();
+    getCompatDir();
     registerStreamProtocol();
     registerLocalProtocol();
     const settings = getCurrentSettings();
@@ -3973,4 +3997,30 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', event => {
+  if (quitCleanup) { event.preventDefault(); return; }
+  const jobs = [...compatPreparing.values()];
+  const pending = [...jobs.map(job => job.promise), ...mergeRuns.values()];
+  if (compatClearing) pending.push(compatClearing);
+  if (!pending.length) return;
+  event.preventDefault();
+  for (const job of jobs) cancelCompatJob(job);
+  for (const task of mergeTasks) {
+    if (task.status !== 'running') continue;
+    task.cancelled = true;
+    require('./src/native/merge-runner').stopMergeChildren(task);
+  }
+  let timer;
+  // A stalled child or predecessor must cancel this quit, never skip cleanup or quit later.
+  quitCleanup = Promise.race([
+    Promise.allSettled(pending).then(() => true),
+    new Promise(resolve => { timer = setTimeout(() => resolve(false), 10000); }),
+  ]).then(completed => {
+    clearTimeout(timer);
+    quitCleanup = null;
+    if (completed) app.quit();
+    else dialog.showErrorBox('退出未完成', '任务清理超过 10 秒，已取消本次退出。应用未强制关闭，原始分集保留；任务仍在收尾，请稍后再次退出。');
+  });
 });

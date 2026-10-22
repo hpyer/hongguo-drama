@@ -111,9 +111,9 @@ test('idle player avoids repeated directory scans while download events and page
     episodeCount = 2; listeners.get('onWatchHistoryUpdated')?.(); await poll();
     assert.ok(ui.find(node => node.props['aria-label'] === '第 2 集'), 'newly published episode must appear without reopening playback');
     status = 'pending'; listeners.get('onDownloadTaskAdded')?.(); await poll(); before = calls;
-    await poll(); assert.equal(calls, before + 1, 'pending download still refreshes');
-    status = 'failed'; retryAt = Date.now() + 60000; await poll(); before = calls;
-    await poll(); assert.equal(calls, before + 1, 'scheduled retry still refreshes');
+    await poll(); assert.equal(calls, before, 'pending download waits for events without scanning');
+    status = 'failed'; retryAt = Date.now() + 60000; listeners.get('onDownloadFailed')?.(); await poll(); before = calls;
+    await poll(); assert.equal(calls, before, 'scheduled retry waits for events without scanning');
     status = 'completed'; retryAt = null; listeners.get('onDownloadCompleted')?.(); await poll(); before = calls;
     await poll(); assert.equal(calls, before, 'completed download returns to idle');
     ui.props.active = false; ui.render(); await ui.flush();

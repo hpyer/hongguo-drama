@@ -81,11 +81,16 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
     assert.equal(ui.button('合并整部剧'), undefined, 'last deleted episode must remove its merge option');
     ui.unmount();
   });
-  await test('periodic refresh drops externally removed merge files and resets selection', async () => {
+  await test('periodic and task events avoid disk scans; focusing merge revalidates files', async () => {
     let list = [{ series_id: 'A', series_title: 'A' }, { series_id: 'B', series_title: 'B' }];
-    const ui = mount({ getSeriesList: async () => list }); await ui.flush();
+    let scans = 0;
+    const ui = mount({ getSeriesList: async options => { if (options?.downloadedOnly) scans++; return list; } }); await ui.flush();
     ui.button('合并整部剧').props.onClick(); ui.render(); assert.ok(ui.button('智能快速合并'));
-    list = [list[1]]; ui.advance(15000); await ui.flush();
+    ui.advance(15000); await ui.flush();
+    ui.emit('onDownloadTaskAdded', {}); ui.emit('onDownloadQueueChanged', {}); ui.emit('onDownloadCompleted', { id: 'new' }); ui.advance(250); await ui.flush();
+    assert.equal(scans, 1, 'background status changes must not scan the whole library');
+    list = [list[1]];
+    await ui.find(n => n.type === 'select' && n.props.className?.includes('merge-select')).props.onFocus(); await ui.flush();
     assert.equal(ui.button('智能快速合并'), undefined, 'changed target must close the existing confirmation');
     const select = ui.find(n => n.type === 'select' && n.props.className?.includes('merge-select'));
     assert.equal(select.props.value, 'B'); ui.unmount();

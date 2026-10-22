@@ -56,7 +56,7 @@ export default function App() {
   }, []);
 
   useEffect(() => window.electronAPI.onStorageError?.((data) => {
-    setStorageError(data?.error || '数据保存失败，请检查磁盘空间和目录权限后重试。');
+    setStorageError(data === null ? '' : data?.error || '数据保存失败，请检查磁盘空间和目录权限后重试。');
   }), []);
 
   // 主进程发来的导航指令（例如浏览页点「立即播放」）

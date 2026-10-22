@@ -6,12 +6,13 @@ const { transformSync } = require('esbuild');
 const { mount } = require('./check-player-resume.cjs');
 
 function fixture() {
-  let finishDownload;
+  let finishDownload, changed;
   const completed = new Set();
   const saved = new Map();
   return {
-    completed, saved, finish: () => finishDownload({ success: true, count: 1 }),
+    completed, saved, changed: () => changed?.(), finish: () => finishDownload({ success: true, count: 1 }),
     apiOverrides: {
+      onDownloadQueueChanged: fn => { changed = fn; return () => {}; },
       getSeriesList: async () => [{ series_id: 'A', updatedAt: 2 }, { series_id: 'B', updatedAt: 1 }],
       getSeriesEpisodes: async seriesId => ({ success: true, data: {
         series_id: seriesId, series_title: seriesId, total: 2,
@@ -27,10 +28,10 @@ function fixture() {
 }
 const start = async (f, props = {}) => {
   const ui = mount({ props: { target: { seriesId: 'A', vidIndex: 1, ts: 1 }, ...props }, apiOverrides: f.apiOverrides });
-  await ui.flush(); ui.metadata(); return ui;
+  ui.changed = f.changed; await ui.flush(); ui.metadata(); return ui;
 };
 const download = (ui, index = 1) => ui.find(n => n.props['aria-label'] === `第 ${index} 集`).props.onDoubleClick();
-const poll = async ui => { await [...ui.timers.values()].find(t => t.delay === 2000).fn(); await ui.flush(); };
+const poll = async ui => { ui.changed(); await [...ui.timers.values()].find(t => t.delay === 2000).fn(); await ui.flush(); };
 const source = ui => ui.find(n => n.type === 'video').props.src;
 
 // App executes its own state/effects; child Player instances use the shared media harness.

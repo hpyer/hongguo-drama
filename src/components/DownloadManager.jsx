@@ -76,6 +76,7 @@ function DownloadManager({ onNavigate, active = true }) {
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
   const taskIndex = useRef(new Map());
+  const downloadedSeries = useRef(new Set());
 
   const refresh = useCallback(async () => {
     const request = ++requests.current.tasks;
@@ -83,6 +84,7 @@ function DownloadManager({ onNavigate, active = true }) {
       const list = await window.electronAPI.getDownloadTasks();
       if (!activeRef.current || request !== requests.current.tasks) return;
       if (!Array.isArray(list)) throw new Error('下载任务读取失败，请重试');
+      for (const task of list) if (task.status === 'completed' && task.hongguoInfo?.series_id) downloadedSeries.current.add(String(task.hongguoInfo.series_id));
       setTasks(list);
       setOrderVersion(value => value + 1);
       const ids = new Set(list.map(task => task.id));
@@ -101,11 +103,13 @@ function DownloadManager({ onNavigate, active = true }) {
     } catch (_) {}
   }, []);
 
-  const loadSeriesList = useCallback(async () => {
+  const loadSeriesList = useCallback(async (verifyFiles = true) => {
     const request = ++requests.current.series;
     try {
-      const list = (await window.electronAPI.getSeriesList({ downloadedOnly: true })) || [];
+      let list = (await window.electronAPI.getSeriesList(verifyFiles ? { downloadedOnly: true } : undefined)) || [];
       if (!activeRef.current || request !== requests.current.series) return;
+      if (verifyFiles) downloadedSeries.current = new Set(list.map(series => String(series.series_id)));
+      else list = list.filter(series => downloadedSeries.current.has(String(series.series_id)));
       setSeriesList(list);
       setMergeSeriesId((prev) => list.some(item => String(item.series_id) === prev) ? prev : (list[0] ? String(list[0].series_id) : ''));
     } catch (_) {}
@@ -150,7 +154,7 @@ function DownloadManager({ onNavigate, active = true }) {
           setTasks(previous => previous.map(task => updates.has(task.id) ? { ...task, ...updates.get(task.id) } : task));
           if (reorder) setOrderVersion(value => value + 1);
         }
-        if (seriesDirty) loadSeriesList();
+        if (seriesDirty) loadSeriesList(false);
         if (queueDirty) loadQueue();
         patches.clear();
         fullRefresh = reorder = seriesDirty = queueDirty = false;
@@ -168,6 +172,8 @@ function DownloadManager({ onNavigate, active = true }) {
       }),
       window.electronAPI.onDownloadTaskAdded(() => { fullRefresh = seriesDirty = true; schedule(); }),
       window.electronAPI.onDownloadCompleted((data) => {
+        const sid = data?.hongguoInfo?.series_id ?? taskIndex.current.get(data?.id)?.hongguoInfo?.series_id;
+        if (sid) downloadedSeries.current.add(String(sid));
         seriesDirty = true;
         patchTask({ ...data, progress: 100 }, 'completed', true);
       }),
@@ -199,7 +205,6 @@ function DownloadManager({ onNavigate, active = true }) {
     const timer = setInterval(() => {
       loadQueue();
       refresh();
-      loadSeriesList();
       loadMergeTasks();
     }, 15000);
     return () => {
@@ -468,6 +473,7 @@ function DownloadManager({ onNavigate, active = true }) {
           onClick={async () => {
             const r = await window.electronAPI.rescanDownloads();
             await refresh();
+            await loadSeriesList();
             showToast(r && r.success
               ? (r.count > 0 ? `已从磁盘补回 ${r.count} 条下载记录` : '没有发现未登记的文件')
               : '扫描失败');
@@ -483,6 +489,7 @@ function DownloadManager({ onNavigate, active = true }) {
             <select
               className="input-field merge-select"
               value={mergeSeriesId}
+              onFocus={() => loadSeriesList()}
               onChange={(e) => setMergeSeriesId(e.target.value)}
               title="选择要合并的短剧"
             >

@@ -341,9 +341,18 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     assert.equal(result.success, true); assert.equal(result.size, 10);
   });
   await check('recovery: 403 retries once with provider Referer and preserves valid body', async () => {
-    const h = hload(async () => ({ url: base + '/referer' })), before = hits;
+    const h = hload(async () => ({ url: base + '/referer', source: 'app' })), before = hits;
     const result = await h.handlers['prepare-online-play']({}, { vid: 'referer', prefetch: true });
     assert.equal(result.success, true); assert.equal(result.size, 10); assert.equal(hits, before + 2);
+  });
+  await check('recovery: unknown and third-party sources never acquire the App Referer', async () => {
+    const h = hload(async () => ({}));
+    for (const source of [undefined, 'xifan', 'hema', 'custom']) {
+      const before = requests.length;
+      await assert.rejects(h.context.requestMedia({ url: base + '/referer', source }), /HTTP 403/);
+      assert.equal(requests.length - before, 2, '403 retries remain bounded');
+      assert.ok(requests.slice(before).every(request => request.headers.referer === undefined));
+    }
   });
   await check('recovery: local files serve suffix and reject malformed or unsatisfiable Range', async () => {
     const h = hload(async () => ({})), file = path.join(root, 'local-range.mp4');

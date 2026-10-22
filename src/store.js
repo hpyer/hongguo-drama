@@ -11,6 +11,7 @@ let cache = null; // { settings, tasks }
 let durable = '{}';
 let errorHandler = null;
 let readError = null;
+let writeError = false;
 const READ_ERROR_MESSAGE = '读取本地数据失败，已保留原文件并暂停保存；请检查文件或目录权限，恢复数据后重启应用。';
 
 function reportReadError() {
@@ -67,9 +68,14 @@ function flush() {
     }
     fs.renameSync(temporary, dataFile);
     durable = serialized;
+    if (writeError) {
+      writeError = false;
+      try { errorHandler?.(null); } catch {}
+    }
   } catch (e) {
     try { fs.unlinkSync(temporary); } catch {}
     cache = JSON.parse(durable);
+    writeError = true;
     try { errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' }); } catch {}
     throw e;
   }
@@ -79,6 +85,7 @@ function init(filePath) {
   dataFile = filePath;
   cache = null;
   readError = null;
+  writeError = false;
   loadCache();
 }
 

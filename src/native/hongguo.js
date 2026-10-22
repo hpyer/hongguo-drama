@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('node:url');
 const { normalizeDownloadQuality } = require('./download-quality');
-const { isPublicMediaUrl } = require('./web-media-guard');
+const { isPublicMediaUrl, webMediaRequestOptions } = require('./web-media-guard');
 
 const API = "https://api5-normal-sinfonlineb.fqnovel.com";
 const UA = "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)";
@@ -330,6 +330,7 @@ async function resolveSeriesId(shareUrl) {
   try {
     for (let redirects = 0; ; redirects++) {
       const res = await axios.get(finalUrl, {
+        ...webMediaRequestOptions(finalUrl),
         headers: { 'User-Agent': WEB_UA },
         adapter: 'http',
         timeout: 25000,
