@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
-const source = fs.readFileSync(process.argv[2] || path.join(__dirname, '../main.js'), 'utf8');
+const source = fs.readFileSync(process.argv[2] || path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
 async function checkWindows() {
   const windows = [];
   class Window extends EventEmitter {
