@@ -1950,7 +1950,8 @@ async function requestMedia(playInfo, options = {}) {
       }
       const retryable = web ? [404, 410].includes(status) || status >= 500 && status <= 599 : status === 403;
       if (!cancelled && attempt === 0 && retryable) {
-        if (!web && !config.headers.Referer) config.headers.Referer = hongguo.VIDEO_REFERER;
+        if (['app', 'api'].includes(playInfo.source) && config.headers.Referer) delete config.headers.Referer;
+        else if (!web && !config.headers.Referer) config.headers.Referer = hongguo.VIDEO_REFERER;
         continue;
       }
       if (!cancelled && config.method === 'GET' && (retryable || status === 403)) hongguo.markWebMediaFailure?.(playInfo);
@@ -3658,7 +3659,7 @@ let latestAppRelease = null;
 function appUpdateSupport() {
   let reason = '';
   if (IS_PREVIEW || !app.isPackaged) reason = '开发或预览版本不支持应用内安装，请使用正式安装版。';
-  else if (process.platform === 'win32' && (process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR)) reason = '便携版请前往发布页下载安装版；安装版支持后续应用内更新。';
+  else if (process.platform === 'win32' && (process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR)) reason = '便携版需手动更新。请先退出旧程序，再运行发布页中的 setup 安装包，并从安装后生成的快捷方式启动；安装版支持后续应用内更新。若仍用便携版，请完整解压新版并直接运行新版文件。';
   else if (!['darwin', 'win32'].includes(process.platform)) reason = '当前系统请前往发布页手动更新。';
   else if (process.platform === 'darwin' && (process.execPath.startsWith('/Volumes/') || process.execPath.includes('/AppTranslocation/'))) reason = '请先将应用放入“应用程序”文件夹后重新打开，再使用应用内更新。';
   return { supported: !reason, reason };

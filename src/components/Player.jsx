@@ -287,10 +287,16 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     }
   }, [currentPosition, resetPlayback, loadDetail, isCurrentFallback, usableLocal, resumeLocal]);
 
-  const refreshCacheInfo = useCallback(async () => {
+  const refreshOnlineCacheInfo = useCallback(async () => {
     try {
       const res = await window.electronAPI.onlineCacheStatus();
       if (res && res.success) setCacheInfo({ count: res.count, bytes: res.bytes });
+    } catch (_) {}
+  }, []);
+
+  const refreshCacheInfo = useCallback(async () => {
+    await refreshOnlineCacheInfo();
+    try {
       const dc = await window.electronAPI.dismissedCount();
       setDismissedCount(dc || 0);
       const st = await window.electronAPI.getStorageUsage();
@@ -301,7 +307,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         setStorageTotal({ files: st.totalFiles, bytes: st.totalBytes });
       }
     } catch (_) {}
-  }, []);
+  }, [refreshOnlineCacheInfo]);
 
   const fmtSize = (b) => {
     if (!b || b <= 0) return '0 B';
@@ -670,13 +676,14 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         setMediaBuffering(true);
         setOnlineUrl(res.url);
         setOnlineProgress(null);
-        refreshCacheInfo();
+        // Playback cache changes do not need a synchronous scan of all download directories.
+        refreshOnlineCacheInfo();
       } catch (e) {
         if (onlineRequestRef.current !== request) return;
         await recoverOnlineFailure(ep, '在线播放失败: ' + e.message);
       }
     },
-    [episodes, activeSeriesId, showToast, refreshCacheInfo, resetPlayback, releaseOnline, currentPosition, recoverOnlineFailure]
+    [episodes, activeSeriesId, showToast, refreshOnlineCacheInfo, resetPlayback, releaseOnline, currentPosition, recoverOnlineFailure]
   );
 
   function reconnectOnce() {
@@ -769,7 +776,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       .then(result => {
         if (prefetchRef.current !== request && onlineRequestRef.current !== request) {
           window.electronAPI.releaseOnlinePlay({ requestId: request.requestId, streamId: result?.streamId }).catch(() => {});
-        } else if (prefetchRef.current === request) refreshCacheInfo();
+        } else if (prefetchRef.current === request) refreshOnlineCacheInfo();
         return result;
       });
   };

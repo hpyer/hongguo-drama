@@ -265,21 +265,24 @@ async function fetchPlayUrlFromWeb(vid, sid, onFailure) {
           data.publicVideoSeo?.available !== true || String(data.publicVideoSeo.itemId) !== String(vid) ||
           String(data.publicVideoSeo.seriesId) !== actualSid) continue;
       // Bind media to the current player, never a recommended video's URL elsewhere in the page.
-      const matchesPlayer = value => {
+      const matchesPlayer = (value, videoUrl) => {
         try {
           const target = new URL(value);
           return target.origin === SITE_ORIGIN && !target.username && !target.password &&
-            target.pathname === `/player/${actualSid}/${String(vid)}`;
+            (target.pathname === `/player/${actualSid}/${String(vid)}` ||
+              // The current canonical page omits vid; its official media path must still identify this episode.
+              target.pathname === `/player/${actualSid}` && videoUrl.origin === SITE_ORIGIN &&
+                videoUrl.pathname.startsWith(`/video/public/${String(vid)}/`));
         } catch (_) { return false; }
       };
       for (const script of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
         if (!/\btype\s*=\s*["']application\/ld\+json["']/i.test(script[1])) continue;
         let video;
         try { video = JSON.parse(script[2]); } catch (_) { continue; }
-        if (video?.['@type'] !== 'VideoObject' || !matchesPlayer(video.url) ||
-            (video['@id'] && !matchesPlayer(video['@id']))) continue;
+        if (video?.['@type'] !== 'VideoObject') continue;
         let videoUrl;
         try { videoUrl = new URL(normalizeVideoUrl(video.contentUrl)); } catch (_) { continue; }
+        if (!matchesPlayer(video.url, videoUrl) || (video['@id'] && !matchesPlayer(video['@id'], videoUrl))) continue;
         if (!isPublicMediaUrl(videoUrl.href)) { lastErr = { code: 'SECURITY_BLOCKED' }; continue; }
         return { url: videoUrl.href, spadeA: null, codec: '', source: 'web', vid: String(vid), userAgent: WEB_UA, referer: WEB_REFERER };
       }
@@ -566,7 +569,7 @@ async function fetchPlayUrlFresh(vid, sid, skipWeb = false) {
     const j = await apiCall("/novel/player/multi_video_model/preload/v1", body, 1, 6000);
     const item = j?.data?.[vid] || {};
     const [url, spadeA, codec] = parseModelVideo(item.video_model);
-    if (url) return { url, spadeA, codec, source: 'api', vid: String(vid), userAgent: UA, referer: VIDEO_REFERER };
+    if (url) return { url, spadeA, codec, source: 'api', vid: String(vid), userAgent: UA };
     sources.push(sourceFailure('api'));
   } catch (e) {
     sources.push(sourceFailure('api', e));

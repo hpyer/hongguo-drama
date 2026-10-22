@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const http = require('node:http');
 const nativeDir = path.join(__dirname, '../src/native');
 const media = name => `https://v3-reading.qznovelvod.com/${name}.mp4`;
 const webPage = (vid = '11', sid = '1', extra = {}) => `<script>window._ROUTER_DATA=${JSON.stringify({ loaderData: {
@@ -160,6 +161,67 @@ const checks = [
       html = bad; assert.equal(await f.fetchPlayUrlFromWeb('11', '1'), null);
     }
   }],
+  ['Web accepts the current series canonical URL only with episode-bound official media', async () => {
+    const url = 'https://hongguoduanju.com/video/public/11/360p.mp4';
+    const page = webPage().replace('/player/1/11', '/player/1').replace(media('web'), url);
+    let html = page;
+    const f = load('hongguo.js', { axios: { get: async () => ({ data: html }) } });
+    assert.equal((await f.fetchPlayUrlFromWeb('11', '1'))?.url, url);
+    assert.equal((await f.fetchPlayUrlFromWeb('11'))?.url, url);
+    for (const bad of [
+      page.replace('/public/11/', '/public/12/'),
+      page.replace(url, media('recommended')),
+      page.replace('/player/1', '/player/2'),
+      page.replace('"itemId":"11"', '"itemId":"12"'),
+      page.replace('"available":true', '"available":false'),
+      page.replace('"isSuccess":true', '"isSuccess":false'),
+      page.replace('"@type":"VideoObject"', '"@type":"VideoObject","@id":"https://hongguoduanju.com/player/2#video"'),
+    ]) {
+      html = bad; assert.equal(await f.fetchPlayUrlFromWeb('11', '1'), null);
+    }
+    html = page.replace('"@type":"VideoObject"', '"@type":"VideoObject","@id":"https://hongguoduanju.com/player/1#video"');
+    assert.equal((await f.fetchPlayUrlFromWeb('11', '1'))?.url, url);
+    html = page.replace('/public/11/', '/public/12/') + page;
+    assert.equal((await f.fetchPlayUrlFromWeb('11', '1'))?.url, url, 'skip earlier recommendation from the same series');
+  }],
+  ['Media 403 switches App/API Referer once and preserves ranges, cancellation and other sources', async () => {
+    const requests = [];
+    const server = http.createServer((request, response) => {
+      requests.push({ path: request.url, referer: request.headers.referer, range: request.headers.range, ua: request.headers['user-agent'] });
+      const accepted = request.url === '/needs-referer' ? !!request.headers.referer : !request.headers.referer;
+      if (!accepted || request.url === '/denied') { response.writeHead(403); response.end(); return; }
+      response.writeHead(206, { 'content-type': 'video/mp4', 'content-range': 'bytes 2-4/10' }); response.end('234');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      const context = vm.createContext({ URL, axios: require('axios'), hongguo: { UA: 'test', WEB_UA: 'browser', VIDEO_REFERER: 'https://novelquickapp.com/', WEB_REFERER: 'https://hongguoduanju.com/' },
+        checkCustomAccess() {}, require: () => ({ webMediaRequestOptions: () => ({}) }) });
+      vm.runInContext(main.slice(main.indexOf('async function requestMedia('), main.indexOf('function awaitMediaOperation(')), context);
+      const base = `http://127.0.0.1:${server.address().port}`;
+      for (const source of ['app', 'api']) {
+        const before = requests.length;
+        const result = await context.requestMedia({ url: base + '/no-referer', source, userAgent: 'app-agent', referer: 'https://novelquickapp.com/' }, { headers: { Range: 'bytes=2-4' } });
+        let body = ''; for await (const chunk of result.data) body += chunk;
+        assert.equal(body, '234'); assert.equal(requests.length - before, 2);
+        assert.equal(requests.at(-1).referer, undefined);
+        assert.equal(requests.at(-1).ua, 'app-agent'); assert.equal(requests.at(-1).range, 'bytes=2-4');
+      }
+      const added = await context.requestMedia({ url: base + '/needs-referer', source: 'app' }, { headers: { Range: 'bytes=2-4' } });
+      added.data.destroy(); assert.equal(requests.at(-1).referer, 'https://novelquickapp.com/');
+      for (const source of ['web', 'custom']) {
+        const before = requests.length;
+        await assert.rejects(context.requestMedia({ url: base + '/no-referer', source, referer: 'https://provider.example/' }));
+        assert.ok(requests.slice(before).every(request => request.referer === 'https://provider.example/'));
+      }
+      const before = requests.length;
+      await assert.rejects(context.requestMedia({ url: base + '/denied', source: 'app' }));
+      assert.equal(requests.length - before, 2, 'persistent 403 remains bounded');
+      const controller = new AbortController(); controller.abort();
+      await assert.rejects(context.requestMedia({ url: base + '/denied', source: 'app' }, { signal: controller.signal }));
+      assert.equal(requests.length - before, 2, 'cancelled requests must not retry');
+    } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  }],
   ['App preserves safe alternates and binds keys and request identity to each candidate', async () => {
     const key1 = '01'.repeat(16), key2 = '02'.repeat(16);
     const f = appFixture({ first: { main_url: media('main'), backup_url: media('backup'), backup_url_list: [media('extra'), media('backup'), 'https://127.0.0.1/private'], codec_type: 'h264', width: 1080, height: 1920, spade_a: encodedKey(key1) },
@@ -171,7 +233,7 @@ const checks = [
     for (const candidate of result.variants) {
       assert.equal(candidate.source, 'app'); assert.equal(candidate.vid, '11');
       assert.equal(candidate.userAgent, f.calls[0].headers['User-Agent']);
-      assert.equal(candidate.referer, 'https://novelquickapp.com/');
+      assert.equal(candidate.referer, undefined, 'App media must not start with the rejected website Referer');
       assert.equal(candidate.variants, undefined);
     }
     assert.equal(result.variants[2].contentKey, key1); assert.equal(result.variants[3].contentKey, key2);

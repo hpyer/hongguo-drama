@@ -23,18 +23,18 @@
 
 ## 下载与安装
 
-**当前正式版：2.3**。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前正式版：2.4**。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
 
-| 设备 | 下载 2.3 | 安装方式 |
+| 设备 | 下载 2.4 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/Hongguo-2.3-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/Hongguo-2.3-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/hongguo-downloader-2.3-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/hongguo-downloader-2.3-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/hongguo-downloader-2.3-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/Hongguo-2.4-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/Hongguo-2.4-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/hongguo-downloader-2.4-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/hongguo-downloader-2.4-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/hongguo-downloader-2.4-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [2.3 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v2.3) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v2.3/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [2.4 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v2.4) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v2.4/SHA256SUMS.txt)
 
-- **首次升级到 2.3**：1.75 及更早版本仍需手动下载一次；退出旧应用后替换 Mac 程序，或运行 Windows 安装包。原有用户资料位置不变，请保留资料目录和下载文件。
+- **首次升级到 2.4**：1.75 及更早版本仍需手动下载一次；退出旧应用后替换 Mac 程序，或运行 Windows 安装包。原有用户资料位置不变，请保留资料目录和下载文件。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件，两种版本沿用原用户资料目录。
@@ -48,6 +48,14 @@
 2. 在「发现短剧」浏览，或在「搜索与下载」输入剧名、红果分享链接或剧集 ID。
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
+
+## 2.4 播放取源与连播优化
+
+- 兼容官网新的播放页路径，保留分集身份校验，避免错误拒绝正常片源。
+- App 与旧接口媒体请求默认不附网页 Referer，403 时切换请求头重试一次。
+- 在线取源和预缓存下一集不再反复扫描整个下载目录，减少慢磁盘造成的播放阻塞。
+- 补充 Windows 便携版手动升级步骤，避免仍从旧快捷方式启动。
+- 详见 [2.4 发行说明](docs/release-2.4.md)。
 
 ## 2.3 红果网络与热播换源修复
 
@@ -323,7 +331,13 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ### 怎样在应用内更新？
 
-先手动安装一次 1.80。之后，Mac 与 Windows 安装版发现新版时可点击下载，完成后再点击重启安装；Windows 便携版仍通过发行页手动下载。软件不会强制更新，也不会因为普通退出而自动安装已下载的版本。关闭提醒或自动检测后，旧版仍可继续使用；来源服务变化仍可能影响功能。
+先手动安装一次最新版。之后，Mac 与 Windows 安装版发现新版时可点击下载，完成后再点击重启安装；Windows 便携版仍通过发行页手动下载。软件不会强制更新，也不会因为普通退出而自动安装已下载的版本。关闭提醒或自动检测后，旧版仍可继续使用；来源服务变化仍可能影响功能。
+
+### Windows 下载新版后，为什么仍显示旧版本？
+
+先退出所有正在运行的红果短剧，再运行最新版文件名以 `-setup.exe` 结尾的安装包，完成后从安装程序生成的快捷方式启动。不要继续使用指向旧便携版的桌面或任务栏入口。设置页显示的版本号才是当前运行版本。
+
+继续使用便携版时，将新版 ZIP 完整解压到新文件夹，再直接运行其中的 EXE；单文件便携版则直接运行刚下载的新版 EXE。确认版本正确后，再更新自己的快捷方式。无需清空整个系统 Temp、应用资料目录或下载的视频。若仍显示旧版，请反馈实际启动文件名和设置页版本号，隐去个人路径。
 
 ### 自行构建也有签名和公证吗？
 
@@ -335,7 +349,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前正式版为 **2.3**。安装包、对应源码、签名公证和验证范围见[2.3 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v2.3)。
+当前正式版为 **2.4**。安装包、对应源码、签名公证和验证范围见[2.4 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v2.4)。
 
 2.3 的检查范围和结果以发行页为准。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替 2.3 验收，也不代表实体电脑完整覆盖。
 
