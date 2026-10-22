@@ -41,6 +41,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     catch { showToast('画面模式已切换，但未能保存；下次打开可能恢复默认'); }
   };
   const [detail, setDetail] = useState(null); // { series_title, episodes: [...], total, completedCount }
+  const [detailError, setDetailError] = useState('');
   const [currentIndex, setCurrentIndex] = useState(1);
   const [autoNext, setAutoNext] = useState(true);
   const [autoAdvancing, setAutoAdvancing] = useState(false);
@@ -232,9 +233,14 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const loadDetail = useCallback(async (seriesId) => {
     if (!seriesId) return null;
     const version = selectionVersion.current;
-    const res = await window.electronAPI.getSeriesEpisodes(seriesId);
+    const res = await window.electronAPI.getSeriesEpisodes(seriesId)
+      .catch(error => ({ success: false, error: error.message }));
     if (version !== selectionVersion.current || String(seriesId) !== selectedSeriesRef.current) return null;
-    if (!res || !res.success) return null;
+    if (!res?.success) {
+      setDetailError(res?.error || '无法获取分集信息，请重试');
+      return null;
+    }
+    setDetailError('');
     setDetail(res.data);
     return res.data;
   }, []);
@@ -396,22 +402,24 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
 
   const toggleAutoCompat = async () => {
     const next = !autoCompat;
-    setAutoCompat(next);
     try {
       const s = await window.electronAPI.getSettings();
-      await window.electronAPI.saveSettings({ ...s, compat_mode: next });
+      const result = await window.electronAPI.saveSettings({ ...s, compat_mode: next });
+      if (!result?.success) throw new Error(result?.error || '设置保存失败');
+      setAutoCompat(next);
       showToast(next ? '兼容模式已开启：无法解码时自动转码' : '兼容模式已关闭');
-    } catch (_) {}
+    } catch (error) { showToast('兼容模式未更改：' + error.message); }
   };
 
   const toggleAutoDelete = async () => {
     const next = !autoDelete;
-    setAutoDelete(next);
     try {
       const s = await window.electronAPI.getSettings();
-      await window.electronAPI.saveSettings({ ...s, auto_delete_watched: next });
+      const result = await window.electronAPI.saveSettings({ ...s, auto_delete_watched: next });
+      if (!result?.success) throw new Error(result?.error || '设置保存失败');
+      setAutoDelete(next);
       showToast(next ? '已开启：看完一集自动删除本地文件' : '已关闭自动删除');
-    } catch (_) {}
+    } catch (error) { showToast('自动删除设置未更改：' + error.message); }
   };
 
   // 打开剧集面板时，补全各剧的下载进度（只拉一次）
@@ -813,12 +821,13 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     // 看完自动删：先把刚看完这集的本地文件清掉，再决定下一集怎么播
     if (autoDelete && sid && usableLocal(finished, String(sid))) {
       window.electronAPI.deleteEpisodeFile(sid, ci).then((r) => {
-        if (r && r.success && r.count > 0) {
+        if (!r?.success) throw new Error(r?.error || '删除失败，请在剧库中重试');
+        if (r.count > 0) {
           showToast(`第 ${ci} 集已看完，自动删除本地文件（释放 ${fmtSize(r.freed)}）`);
           refreshCacheInfo();
           loadDetail(sid);
         }
-      });
+      }).catch(error => showToast(`第 ${ci} 集自动删除失败：${error.message}`));
     }
 
     if (!an) return;
@@ -941,6 +950,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     setCompatMap({});
     setActiveSeriesId(String(sid));
     setDetail(null);
+    setDetailError('');
     setWaitingFor(null);
     setLoading(true);
     try {
@@ -1138,6 +1148,21 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   // ===== 渲染 =====
   if (loading) {
     return <div className="player-container"><div className="player-empty">加载中…</div></div>;
+  }
+
+  if (!detail && detailError) {
+    return (
+      <div className="player-container">
+        <div className="player-empty" role="alert">
+          <p>加载剧集失败：{detailError}</p>
+          <button className="btn btn-primary" onClick={() => switchSeries(activeSeriesId,
+            String(target?.seriesId) === activeSeriesId ? target.vidIndex : 0,
+            String(target?.seriesId) === activeSeriesId && !!target.resume)}>
+            <RefreshCw size={16} /> 重试加载
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!seriesList.length) {

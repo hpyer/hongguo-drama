@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧下载器（独立版）主进程
+ * main.js - 红果短剧 2.5 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -49,6 +49,8 @@ let appUpdater = null;
 let updateDownloadGeneration = 0;
 let pendingUpdateOperations = 0;
 let quitCleanup = null;
+let quitReady = false;
+let mergeTempCleanup = null;
 const UPDATE_BLOCKED_CHANNELS = new Set(['hongguo-download-batch', 'download-single-episode', 'retry-task', 'retry-tasks', 'resume-all', 'merge-series', 'transcode-for-playback', 'prepare-online-play', 'save-settings']);
 const ipcMain = {
   handle(channel, handler) {
@@ -555,6 +557,7 @@ function visibleSeries() {
 // 导致并发数恒为 1（无论 max_concurrent 设为多少）。
 // 现在由 runTask 自行在结束时回调 pumpQueue，调度器只负责按并发上限派发。
 function pumpQueue() {
+  if (quitCleanup) return;
   downloadQueue = downloadQueue.filter(task => task.status === 'pending');
   for (const task of downloadQueue) repairTaskDestination(task);
   while (activeDownloads < MAX_CONCURRENT_DOWNLOADS) {
@@ -921,11 +924,13 @@ function sourcePageUrl(value) {
 }
 
 let searchWindow = null;
+let sniffWindow = null;
 let searchWindowReady = null;
 
-function getSearchWindow() {
-  if (searchWindow && !searchWindow.isDestroyed()) return searchWindow;
-  searchWindow = new BrowserWindow({
+function getSearchWindow(background = false) {
+  const current = background ? sniffWindow : searchWindow;
+  if (current && !current.isDestroyed()) return current;
+  const win = new BrowserWindow({
     width: 1100,
     height: 820,
     show: false,
@@ -939,11 +944,10 @@ function getSearchWindow() {
     },
   });
   // 站内跳转保持在同一个窗口内，避免弹出新窗口
-  searchWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try { searchWindow.loadURL(sourcePageUrl(url)).catch(() => {}); } catch (_) {}
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try { win.loadURL(sourcePageUrl(url)).catch(() => {}); } catch (_) {}
     return { action: 'deny' };
   });
-  const win = searchWindow;
   for (const name of ['will-navigate', 'will-redirect']) {
     win.webContents.on(name, (event, url) => {
       try { sourcePageUrl(url); } catch (_) { event.preventDefault(); }
@@ -951,8 +955,11 @@ function getSearchWindow() {
   }
   win.on('closed', () => {
     if (searchWindow === win) searchWindow = null;
+    if (sniffWindow === win) sniffWindow = null;
   });
-  return searchWindow;
+  if (background) sniffWindow = win;
+  else searchWindow = win;
+  return win;
 }
 
 /**
@@ -1062,7 +1069,7 @@ const BROWSE_META_JS = `(() => {
 async function runSniffOnUrl(url, label) {
   // 同一窗口串行执行，避免并发导航互相打断
   const task = async () => {
-    const win = getSearchWindow();
+    const win = getSearchWindow(true);
     // Reserve the last part of the deadline for empty-page details.
     const pollDeadline = Date.now() + SEARCH_TIMEOUT_MS * 0.8;
     let expired = false;
@@ -1670,6 +1677,7 @@ function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
 
 ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
   try {
+    if (mergeTempCleanup) await mergeTempCleanup;
     const sid = String(seriesId);
     const entry = seriesRegistry.find(s => String(s.series_id) === sid);
     const seriesTitle = entry?.series_title || downloadTasks.find(t => String(t.hongguoInfo?.series_id) === sid)?.hongguoInfo.series_title || '未命名短剧';
@@ -1681,11 +1689,11 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     const outDir = dir || path.dirname(ordered[0].path);
     const baseName = outputName && String(outputName).trim() ? sanitizeFolderName(outputName) : `${sanitizeFolderName(seriesTitle)}_合集`;
     if (!baseName || baseName === '.' || baseName === '..') return { success: false, error: '请输入有效输出名称' };
-    const output = path.join(outDir, `${baseName}.mp4`);
-    if (fs.existsSync(output)) return { success: false, error: `输出文件已存在：${baseName}.mp4，请先删除或换个名字` };
+    let output = path.join(outDir, `${baseName}.mp4`);
+    for (let number = 2; fs.existsSync(output); number++) output = path.join(outDir, `${baseName} (${number}).mp4`);
     const totalBytes = ordered.reduce((sum, e) => sum + fs.statSync(e.path).size, 0);
     const id = 'merge_' + randomUUID();
-    const task = { id, seriesId: sid, seriesTitle, output, outputName: `${baseName}.mp4`, total: ordered.length,
+    const task = { id, seriesId: sid, seriesTitle, output, outputName: path.basename(output), total: ordered.length,
       done: 0, checked: 0, progress: 0, status: 'running', stage: 'checking', stageText: '检查分集', totalBytes,
       totalDuration: 0, codecWarning: '', error: '', startTime: Date.now(), elapsedSeconds: 0, speed: 0, etaSeconds: null };
     mergeTasks.unshift(task);
@@ -1740,6 +1748,10 @@ function loadMergeTasks() {
     mergeTasks = (store.getMergeTasks() || []).map(t => t.status === 'running'
       ? { ...t, status: 'stopped', stage: 'stopped', stageText: '已中断', error: '应用关闭时中断', endTime: Date.now() } : t);
   } catch (_) { mergeTasks = []; }
+  const directories = [...new Set(mergeTasks.filter(task => typeof task.output === 'string' && path.isAbsolute(task.output)).map(task => path.dirname(task.output)))];
+  mergeTempCleanup = require('./src/native/merge-runner').cleanupMergeTemps(directories)
+    .catch(() => console.warn('[Merge] 部分遗留临时文件未能清理'))
+    .finally(() => { mergeTempCleanup = null; });
 }
 
 /**
@@ -3897,6 +3909,12 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, 'dist-react', 'index.html'));
   }
 
+  mainWindow.on('close', event => {
+    if (process.platform !== 'darwin' && !quitReady) {
+      event.preventDefault();
+      app.quit();
+    }
+  });
   mainWindow.on('closed', () => {
     stealth.dispose();
     mediaAccess.clear();
@@ -3907,6 +3925,15 @@ function createWindow() {
 }
 
 // ===== 应用生命周期 =====
+// Remote pages get no permissions; the trusted player keeps fullscreen and clipboard controls.
+app.on('web-contents-created', (_event, contents) => {
+  const allowed = (webContents, permission, details) => ['fullscreen', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission)
+    && details?.isMainFrame === true && rendererSecurity.isTrustedUrl(details.requestingUrl)
+    && rendererSecurity.isTrustedSender({ sender: webContents, senderFrame: webContents?.mainFrame }, mainWindow);
+  contents.session.setPermissionRequestHandler((webContents, permission, callback, details) => callback(allowed(webContents, permission, details)));
+  contents.session.setPermissionCheckHandler((webContents, permission, _origin, details) => allowed(webContents, permission, details));
+});
+
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   let startupStage = '读取本地数据';
   try {
@@ -4002,10 +4029,19 @@ app.on('window-all-closed', () => {
 app.on('before-quit', event => {
   if (quitCleanup) { event.preventDefault(); return; }
   const jobs = [...compatPreparing.values()];
-  const pending = [...jobs.map(job => job.promise), ...mergeRuns.values()];
+  const pending = [...jobs.map(job => job.promise), ...mergeRuns.values(), ...downloadRuns.values()];
   if (compatClearing) pending.push(compatClearing);
-  if (!pending.length) return;
+  if (mergeTempCleanup) pending.push(mergeTempCleanup);
+  const downloading = downloadRuns.size || downloadQueue.length || sourceRetryTimers.size;
+  if (!pending.length && !downloading) { quitReady = true; return; }
   event.preventDefault();
+  if (downloading) {
+    try { pauseAllTasks(); }
+    catch (_) {
+      dialog.showErrorBox('退出未完成', '无法保存下载暂停状态，已取消本次退出。请检查本地存储后重试。');
+      return;
+    }
+  }
   for (const job of jobs) cancelCompatJob(job);
   for (const task of mergeTasks) {
     if (task.status !== 'running') continue;

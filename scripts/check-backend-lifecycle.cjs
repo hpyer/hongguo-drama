@@ -47,6 +47,59 @@ function timers() {
   };
 }
 const checks = [
+  ['Windows main close requests normal quit even when a hidden search window survives', async () => {
+    const h = fixture('win32');
+    h.context.createWindow();
+    h.context.getSearchWindow(true);
+    let prevented = false;
+    h.windows[0].emit('close', { preventDefault: () => prevented = true });
+    assert.equal(prevented, true, 'main window must remain available while before-quit decides');
+    assert.equal(h.state.quits, 1, 'hidden browser must not keep an invisible Windows app alive');
+    h.app.emit('before-quit', { preventDefault() { throw new Error('idle quit should pass'); } });
+    h.windows[0].emit('close', { preventDefault() { throw new Error('approved quit must close'); } });
+    assert.equal(h.state.quits, 1, 'approved close must not request quit recursively');
+  }],
+  ['repeat merge chooses a new filename and preserves existing collections', async () => {
+    const h = fixture('darwin', { mergeRunner: { runMerge: async ({ task }) => { task.status = 'completed'; } } });
+    const input = path.join(h.root, 'ep.mp4'); fs.writeFileSync(input, 'original');
+    h.context.collectSeriesEpisodeFiles = () => ({ dir: h.root, ordered: [{ path: input, vid_index: 1 }] });
+    h.context.resolveFfmpeg = () => '/fixture/ffmpeg';
+    fs.writeFileSync(path.join(h.root, '未命名短剧_合集.mp4'), 'first');
+    fs.writeFileSync(path.join(h.root, '未命名短剧_合集 (2).mp4'), 'second');
+    const result = await h.handlers['merge-series']({}, '1');
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.outputName, '未命名短剧_合集 (3).mp4');
+    assert.equal(fs.readFileSync(path.join(h.root, '未命名短剧_合集.mp4'), 'utf8'), 'first');
+    await flush();
+  }],
+  ['startup cleans abandoned merge work only in recorded output directories', async () => {
+    const h = fixture(), dir = path.join(h.root, 'series'); fs.mkdirSync(dir);
+    for (const name of ['.merge-Ab1234', '.merge-user', '.merge-Zz9876']) fs.mkdirSync(path.join(dir, name));
+    fs.writeFileSync(path.join(dir, '.merge-Ab1234', '0.mp4'), 'temporary');
+    fs.writeFileSync(path.join(dir, '.merge-Zz9876', 'keep.txt'), 'unrelated');
+    fs.writeFileSync(path.join(dir, 'original.mp4'), 'original');
+    h.run('store.getMergeTasks = () => [{ output: ' + JSON.stringify(path.join(dir, '合集.mp4')) + ", status: 'running' }]; loadMergeTasks();");
+    await h.run('mergeTempCleanup');
+    assert.equal(fs.existsSync(path.join(dir, '.merge-Ab1234')), false);
+    assert.ok(fs.existsSync(path.join(dir, '.merge-user')));
+    assert.ok(fs.existsSync(path.join(dir, '.merge-Zz9876', 'keep.txt')));
+    assert.equal(fs.readFileSync(path.join(dir, 'original.mp4'), 'utf8'), 'original');
+  }],
+  ['quit cancels downloads and retries, waits for temporary cleanup and does not start the queue', async () => {
+    const h = fixture(); let cancelled = false, closed = false, release;
+    const partial = path.join(h.root, 'ep.enc.tmp'); fs.writeFileSync(partial, 'partial');
+    h.context.activeTask = { id: 'download', status: 'downloading', cancelSource: { cancel() { cancelled = true; } }, writer: { destroy() { closed = true; } } };
+    h.context.downloadPromise = new Promise(resolve => { release = () => { fs.rmSync(partial, { force: true }); h.run("downloadRuns.delete('download')"); resolve(); }; });
+    h.run("downloadTasks=[activeTask,{id:'queued',status:'pending'},{id:'retry',status:'failed',retryAt:Date.now()+600000}]; downloadQueue=[downloadTasks[1]]; downloadRuns.set('download',downloadPromise); armSourceRetry(downloadTasks[2]);");
+    try {
+      let prevented = false; h.app.emit('before-quit', { preventDefault: () => prevented = true });
+      assert.equal(prevented, true); assert.ok(cancelled && closed);
+      assert.equal(h.run('sourceRetryTimers.size'), 0); assert.equal(h.run('downloadQueue.length'), 0);
+      assert.equal(h.run('downloadTasks[1].status'), 'stopped'); assert.equal(h.run('downloadTasks[2].status'), 'stopped');
+      assert.equal(h.state.quits, 0); release(); await flush();
+      assert.equal(h.state.quits, 1); assert.equal(fs.existsSync(partial), false);
+    } finally { h.run('for (const timer of sourceRetryTimers.values()) clearTimeout(timer);'); release(); }
+  }],
   ['compat rejects non-positive, fractional and path episode indices through both IPC entries', async () => {
     const h = fixture();
     for (const index of ['../../escape', '../1', '1/../../file', 0, -1, 1.5, true, {}, '1e2', ' 1', Number.MAX_SAFE_INTEGER + 1]) {

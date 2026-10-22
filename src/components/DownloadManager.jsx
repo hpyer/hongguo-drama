@@ -423,7 +423,7 @@ function DownloadManager({ onNavigate, active = true }) {
         <button
           className="btn btn-primary"
           onClick={resumeAll}
-          disabled={queue.active > 0 || pausableCount === 0}
+          disabled={!tasks.some(task => ['stopped', 'failed', 'pending'].includes(task.status))}
           title="把等待中 / 已停止 / 失败的任务全部排队开跑"
         >
           <Play size={15} />

@@ -10,7 +10,7 @@ function createUpdateInstaller({ updater, currentVersion, isEnabled, installBloc
   updater.disableDifferentialDownload = true;
   updater.logger = null;
   updater.setFeedURL({ provider: 'github', owner: 'jackotom', repo: 'hongguo-drama' });
-  let state = { supported: true, reason: '', status: 'idle', version: null, percent: 0, error: '' };
+  let state = { supported: true, reason: '', status: 'idle', version: null, percent: 0, error: '', downloaded: false };
   let operation = null, cancellationToken = null, generation = 0, operationGeneration = 0;
   let nativeInstallListener = null, nativeReadyVersion = null;
   const getState = () => ({ ...state });
@@ -33,7 +33,7 @@ function createUpdateInstaller({ updater, currentVersion, isEnabled, installBloc
     generation++;
     clearNativeInstall();
     nativeReadyVersion = null;
-    update({ status: 'idle', version: null, percent: 0, error: '' });
+    update({ status: 'idle', version: null, percent: 0, error: '', downloaded: false });
     cancellationToken?.cancel();
     return { success: true, state: getState() };
   }
@@ -46,10 +46,10 @@ function createUpdateInstaller({ updater, currentVersion, isEnabled, installBloc
       const queuedGeneration = generation;
       return operation.then(() => queuedGeneration === generation ? download(expectedVersion) : fail('更新已取消。'));
     }
-    if (state.status === 'downloaded' && state.version === expectedVersion) return Promise.resolve({ success: true, state: getState() });
+    if (state.downloaded && state.version === expectedVersion) return Promise.resolve({ success: true, state: getState() });
     const request = ++generation;
     operationGeneration = request;
-    update({ status: 'checking', version: expectedVersion, percent: 0, error: '' });
+    update({ status: 'checking', version: expectedVersion, percent: 0, error: '', downloaded: false });
     operation = (async () => {
       try {
         const result = await updater.checkForUpdates();
@@ -64,7 +64,7 @@ function createUpdateInstaller({ updater, currentVersion, isEnabled, installBloc
         await updater.downloadUpdate(cancellationToken);
         if (request !== generation || !isEnabled()) return fail('更新已取消。');
         // Only this operation's verified completion can make the update installable.
-        update({ status: 'downloaded', percent: 100, error: '' });
+        update({ status: 'downloaded', percent: 100, error: '', downloaded: true });
         return { success: true, state: getState() };
       } catch (_) {
         if (request !== generation || !isEnabled()) return fail('更新已取消。');
@@ -97,7 +97,7 @@ function createUpdateInstaller({ updater, currentVersion, isEnabled, installBloc
     }
   }
   function install() {
-    if (!isEnabled() || state.status !== 'downloaded') return fail('请先完成更新下载。');
+    if (!isEnabled() || !state.downloaded || !['downloaded', 'error'].includes(state.status)) return fail('请先完成更新下载。');
     const blocked = installBlocker();
     if (blocked) return fail(blocked);
     update({ status: 'installing', error: '' });

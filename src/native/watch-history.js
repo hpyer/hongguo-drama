@@ -51,8 +51,10 @@ function seasonTitle(title) {
       if (char === '十' || char === '百') { n += (digit || 1) * (char === '十' ? 10 : 100); digit = 0; }
       else digit = digits[char] || 0;
     }
-    season = n + digit;
+    season = /[十百]/.test(value) ? n + digit : Number([...value].map(char => digits[char]).join(''));
   }
+  // Bare bracket numbers can be years or other title metadata; accept only modest season numbers.
+  if (!Number.isInteger(season) || season < 1 || match[3] && season > 99) return { base: text, season: 1 };
   return { base: match[1], season };
 }
 
