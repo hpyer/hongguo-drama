@@ -84,7 +84,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
       if (!menuOpen && !ignoresPlaybackShortcut(event.target) && key && [shortcuts.previous, shortcuts.next, shortcuts.backward, shortcuts.forward].includes(key)) {
         if (event.type === 'keydown') {
           navigationKeysRef.current.add(physicalKey);
-          // Seeking renews the idle timer without revealing hidden controls.
+          // 2.8: Seeking renews the idle timer without revealing hidden controls.
           if ([shortcuts.backward, shortcuts.forward].includes(key)) scheduleHide();
         }
         return;
