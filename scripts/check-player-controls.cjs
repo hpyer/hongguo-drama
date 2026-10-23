@@ -141,8 +141,26 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
           advance(3000); render();
           assert.ok(hidden(), `${key} seek release must stay hidden after Shift release`);
           movePointer(); assert.ok(!hidden(), 'real pointer movement reveals controls after seek');
+          advance(1900); render();
           keyboard('keydown', key, { shiftKey: custom }); keyboard('keyup', key, { shiftKey: custom });
           assert.ok(!hidden(), 'seek preserves controls that were already visible');
+          advance(200); render();
+          assert.ok(!hidden(), `${key} visible seek renews the idle timer past the original 2-second deadline`);
+          advance(1799); render();
+          assert.ok(!hidden(), `${key} visible seek stays visible until 2 seconds after activity`);
+          advance(1); render(); assert.ok(hidden(), `${key} visible seek hides after 2 idle seconds`);
+
+          movePointer(); advance(1900); render();
+          keyboard('keydown', key, { shiftKey: custom, defaultPrevented });
+          for (let repeat = 0; repeat < 6; repeat++) {
+            advance(500); render();
+            assert.ok(!hidden(), `${key} held seek stays visible across the original deadline (repeat ${repeat})`);
+            keyboard('keydown', key, { shiftKey: custom, defaultPrevented, repeat: true });
+          }
+          if (custom) keyboard('keyup', 'Shift');
+          keyboard('keyup', key, { shiftKey: false, defaultPrevented });
+          advance(1999); render(); assert.ok(!hidden(), `${key} held seek stays visible before idle expiry`);
+          advance(1); render(); assert.ok(hidden(), `${key} held seek resumes hiding after 2 idle seconds`);
         }
       }
     }

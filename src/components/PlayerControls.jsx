@@ -82,7 +82,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
       if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
       const key = shortcutKey(event);
       if (!menuOpen && !ignoresPlaybackShortcut(event.target) && key && [shortcuts.previous, shortcuts.next, shortcuts.backward, shortcuts.forward].includes(key)) {
-        if (event.type === 'keydown') navigationKeysRef.current.add(physicalKey);
+        if (event.type === 'keydown') {
+          navigationKeysRef.current.add(physicalKey);
+          // Seeking renews the idle timer without revealing hidden controls.
+          if ([shortcuts.backward, shortcuts.forward].includes(key)) scheduleHide();
+        }
         return;
       }
       reveal();
