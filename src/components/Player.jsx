@@ -91,6 +91,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
 
   const videoRef = useRef(null);
   const stageRef = useRef(null);
+  const fullscreenScrollRef = useRef(null);
   const playbackRateRef = useRef(1);
   const toastTimer = useRef(null);
   const pendingSeekRef = useRef(0); // 切集后要跳转的秒数
@@ -889,14 +890,35 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     if (activeRef.current && pendingAutoplayRef.current) v.play().catch(() => { if (playbackVersion === mediaVersion.current) setAutoAdvancing(false); });
   };
 
+  const restoreFullscreenScroll = useCallback(() => {
+    const saved = fullscreenScrollRef.current;
+    if (!saved || document.fullscreenElement) return;
+    saved.element.scrollTop = saved.top;
+    fullscreenScrollRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    let frame = 0;
+    const restore = () => {
+      if (!document.fullscreenElement) frame = requestAnimationFrame(restoreFullscreenScroll);
+    };
+    document.addEventListener('fullscreenchange', restore);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('fullscreenchange', restore); };
+  }, [restoreFullscreenScroll]);
+
   const toggleFullscreen = useCallback(async () => {
     if (document.querySelector('.stealth-mode')) { showToast('请先退出隐身小窗'); return; }
     try {
       if (portrait) { setWindowFill(fill => !fill); return; }
       if (document.fullscreenElement === stageRef.current) await document.exitFullscreen();
-      else await stageRef.current?.requestFullscreen();
-    } catch { showToast('无法进入或退出全屏，请重试'); }
-  }, [portrait, showToast]);
+      else {
+        const element = stageRef.current?.closest('.main-content');
+        // Fullscreen takes the player out of flow and can clamp the page's scrollTop to zero.
+        if (element && !fullscreenScrollRef.current) fullscreenScrollRef.current = { element, top: element.scrollTop };
+        await stageRef.current?.requestFullscreen();
+      }
+    } catch { restoreFullscreenScroll(); showToast('无法进入或退出全屏，请重试'); }
+  }, [portrait, showToast, restoreFullscreenScroll]);
 
   // Capture handled keys before media controls; cancel keyup too so focused buttons cannot toggle twice.
   useEffect(() => {

@@ -17,7 +17,13 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   const releases = [], settingsSaved = [];
   const events = new Map(), mediaEvents = new Map(), timers = new Map();
   const listenerOptions = new Map(), mediaCalls = { play: 0, pause: 0 };
-  const document = { activeElement: null, querySelector: () => null };
+  const documentEvents = new Map();
+  const document = { activeElement: null, querySelector: () => null, fullscreenElement: null,
+    addEventListener: (name, fn) => documentEvents.set(name, fn), removeEventListener: name => documentEvents.delete(name),
+    exitFullscreen: async () => { document.fullscreenElement = null; documentEvents.get('fullscreenchange')?.(); } };
+  const scrollArea = { scrollTop: 360 };
+  const stage = { closest: selector => selector === '.main-content' ? scrollArea : null,
+    requestFullscreen: async () => { document.fullscreenElement = stage; scrollArea.scrollTop = 0; documentEvents.get('fullscreenchange')?.(); } };
   let cursor = 0, tree, timerId = 0, oldSrc = '', oldKey;
   let transcodeProgress;
   const media = { currentTime: 0, duration: 100, readyState: 0, videoWidth: 640, paused: false,
@@ -68,7 +74,7 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   const shortcutModule = { exports: {} };
   vm.runInNewContext(shortcutSource, { module: shortcutModule, exports: shortcutModule.exports, window, Event });
   const setTimer = (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; };
-  const context = { module: { exports: {} }, require: n => n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences }) => preferences } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), console };
+  const context = { module: { exports: {} }, require: n => n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences }) => preferences } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), requestAnimationFrame: fn => setTimer(fn, 0), cancelAnimationFrame: id => timers.delete(id), console };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
   const nodes = () => { const out = []; const walk = n => { if (!n || typeof n !== 'object') return; out.push(n); n.children?.forEach(walk); }; walk(tree); return out; };
@@ -77,6 +83,8 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   const render = () => {
     cursor = 0; tree = context.module.exports.default(props);
     const video = find(n => n.type === 'video');
+    const stageNode = find(n => n.props.className?.split(' ').includes('player-stage'));
+    if (stageNode) stageNode.props.ref.current = stage;
     if (video) { if (video.props.src !== oldSrc || video.props.key !== oldKey) { media.src = video.props.src; media.load(); oldSrc = video.props.src; oldKey = video.props.key; } video.props.ref.current = media; }
     else for (const slot of slots) if (slot?.current === media) slot.current = null;
     effects.splice(0).forEach(fn => fn()); return tree;
@@ -98,7 +106,7 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   };
   render();
   return { props, render, flush, find, media, metadata, saves, prepares, transcodes, cancelled, events, timers, listenerOptions, mediaCalls, document, dispatchKey,
-    releases, settingsSaved,
+    releases, settingsSaved, stage, scrollArea,
     flushBatched: async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); render(); },
     transcodeProgress: payload => transcodeProgress?.(payload),
     button: label => find(n => n.type === 'button' && text(n).includes(label)),
@@ -112,6 +120,29 @@ module.exports = { mount };
 if (require.main === module) (async () => {
   let failures = 0;
   const test = async (name, fn) => { if (process.argv[2] && !name.includes(process.argv[2])) return; try { await fn(); console.log(`PASS ${name}`); } catch (e) { failures++; console.error(`FAIL ${name}: ${e.stack}`); } };
+  await test('fullscreen scroll restores the player page after button and Escape exits', async () => {
+    const ui = mount(); await ui.flush();
+    try {
+      for (const fromButton of [true, false]) {
+        ui.scrollArea.scrollTop = fromButton ? 360 : 280;
+        const expected = ui.scrollArea.scrollTop;
+        const toggle = ui.find(n => typeof n.props.onToggleFullscreen === 'function').props.onToggleFullscreen;
+        await toggle();
+        assert.equal(ui.scrollArea.scrollTop, 0, 'entering fullscreen removes the player from the page flow');
+        if (fromButton) await toggle(); else await ui.document.exitFullscreen();
+        for (const [id, timer] of ui.timers) if (timer.delay === 0) { ui.timers.delete(id); timer.fn(); }
+        assert.equal(ui.scrollArea.scrollTop, expected, 'exit must restore the page position from before fullscreen');
+      }
+    } finally { ui.unmount(); }
+  });
+  await test('fullscreen scroll is restored after a rejected request and remains usable', async () => {
+    const ui = mount(); await ui.flush();
+    try {
+      ui.stage.requestFullscreen = async () => { ui.scrollArea.scrollTop = 0; throw new Error('denied'); };
+      await ui.find(n => typeof n.props.onToggleFullscreen === 'function').props.onToggleFullscreen();
+      assert.equal(ui.scrollArea.scrollTop, 360);
+    } finally { ui.unmount(); }
+  });
   await test('online unsupported-source error reconnects once without decoder certainty or automatic transcode', async () => {
     const ui = mount({ props: { target: { seriesId: 'A', vidIndex: 1, ts: 1 } } }); await ui.flush();
     ui.error(4); await ui.flush();
