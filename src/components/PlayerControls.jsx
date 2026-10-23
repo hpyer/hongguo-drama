@@ -32,6 +32,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   const speedRef = useRef(null);
   const navigationKeysRef = useRef(new Set());
   const pointerRef = useRef(null);
+  const idleDeadlineRef = useRef(0);
   const expanded = fullscreen || windowFill;
 
   useEffect(() => {
@@ -70,26 +71,28 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     const scheduleHide = () => {
       clearTimeout(timer);
       if (available && !media.paused && !menuOpen && !danmakuOpen && !selectionPanel && !dragging) {
-        timer = setTimeout(hide, 2000);
+        // Fullscreen and source changes keep the deadline set by actual user activity.
+        if (!idleDeadlineRef.current) idleDeadlineRef.current = Date.now() + 1000;
+        timer = setTimeout(hide, Math.max(0, idleDeadlineRef.current - Date.now()));
       }
     };
-    const reveal = () => { clearTimeout(pauseTimer); setControlsHidden(false); scheduleHide(); };
+    const reveal = () => { clearTimeout(pauseTimer); idleDeadlineRef.current = Date.now() + 1000; setControlsHidden(false); scheduleHide(); };
     const onPointerLeave = () => { clearTimeout(timer); hide(); };
     const onKey = event => {
       const physicalKey = event.code || event.key;
       // Keep the release paired across source/effect changes, even if Shift is released first.
       if (event.type === 'keyup' && navigationKeysRef.current.delete(physicalKey)) return;
       if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
+      if (event.key === 'Tab') { reveal(); return; }
+      if (menuOpen || danmakuOpen || selectionPanel || ignoresPlaybackShortcut(event.target, event.key)) return;
       const key = shortcutKey(event);
-      if (!menuOpen && !ignoresPlaybackShortcut(event.target) && key && [shortcuts.previous, shortcuts.next, shortcuts.backward, shortcuts.forward].includes(key)) {
-        if (event.type === 'keydown') {
-          navigationKeysRef.current.add(physicalKey);
-          // 2.8: Seeking renews the idle timer without revealing hidden controls.
-          if ([shortcuts.backward, shortcuts.forward].includes(key)) scheduleHide();
-        }
-        return;
+      const action = key && SHORTCUT_ACTIONS.find(item => shortcuts[item.id] === key);
+      if (!action) return;
+      if (action.id === 'play') { reveal(); return; }
+      if (event.type === 'keydown') {
+        navigationKeysRef.current.add(physicalKey);
+        // Keyboard-only playback actions must not extend pointer inactivity.
       }
-      reveal();
     };
     const onPointerMove = event => {
       const previous = pointerRef.current;

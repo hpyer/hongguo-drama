@@ -133,3 +133,41 @@ test('limited source preserves the exact limitation and full text until display'
   assert.equal(nextEpisode.animation.cursor, 0);
   assert.equal(nextEpisode.comments.length, 0);
 });
+
+
+test('all three comment densities emit more distinct comments while keeping their order', () => {
+  const counts = ['sparse', 'normal', 'dense'].map((density, index) => {
+    const state = { items: [], cursor: 0, nextId: 0, cooldown: 0 };
+    const comments = Array.from({ length: 40 }, (_, i) => `comment ${i}`);
+    const options = { width: 1987, height: 1248, settings: { ...DEFAULT_DANMAKU_SETTINGS, density, area: 'full' }, reducedMotion: false };
+    for (let frame = 0; frame < 120; frame++) advanceDanmaku(state, comments, 1 / 60, options);
+    assert.ok(state.nextId >= [3, 4, 8][index], `${density}: ${state.nextId}`);
+    assert.equal(new Set(state.items.map(item => item.content)).size, state.items.length);
+    return state.nextId;
+  });
+  assert.ok(counts[0] < counts[1] && counts[1] < counts[2]);
+});
+
+
+test('少量评论滚出后轮播，追加的新评论优先，屏蔽和暂停有效', () => {
+  const state = { items: [], cursor: 0, nextId: 0, cooldown: 0 };
+  const comments = ['甲', '乙', '丙'];
+  const runtime = { width: 500, height: 300, settings: { ...DEFAULT_DANMAKU_SETTINGS, density: 'dense', speed: 2 }, reducedMotion: false };
+  for (let frame = 0; frame < 1800; frame++) {
+    advanceDanmaku(state, comments, 1 / 60, runtime);
+    if (frame > 60) assert.ok(state.items.length > 0, `不能空屏: ${frame}`);
+    assert.equal(new Set(state.items.map(item => item.content)).size, state.items.length);
+  }
+  assert.ok(state.nextId > comments.length);
+  comments.push('新内容');
+  for (let frame = 0; frame < 60; frame++) advanceDanmaku(state, comments, 1 / 60, runtime);
+  assert.equal(state.cursor, 4);
+  assert.ok(state.items.some(item => item.content === '新内容'));
+  const before = JSON.stringify(state);
+  advanceDanmaku(state, comments, 0, runtime);
+  assert.equal(JSON.stringify(state), before);
+  state.items = [];
+  runtime.settings = { ...runtime.settings, blockedWords: comments.join(',') };
+  for (let frame = 0; frame < 600; frame++) advanceDanmaku(state, comments, 1 / 60, runtime);
+  assert.equal(state.items.length, 0);
+});

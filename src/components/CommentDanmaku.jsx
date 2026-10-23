@@ -103,6 +103,7 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
     const options = () => ({ width, height, settings, reducedMotion, bottomInset: Math.max(76, (controls?.clientHeight || 0) + 8) });
     const reset = () => {
       state.items = [];
+      state.replayQueue = [];
       state.cooldown = 0;
       previous = 0;
       setItems([...state.items]);
@@ -111,7 +112,7 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
       const node = nodes.current.get(item.id);
       if (node) node.style.transform = `translate(${item.x}px, ${item.y}px)`;
     });
-    const canAdvance = () => !video.paused && !video.ended && !video.seeking && video.readyState >= 2 && !document.hidden;
+    const canAdvance = () => !video.paused && !video.ended && !document.hidden;
     const tick = now => {
       frame = 0;
       if (!canAdvance()) { previous = 0; return; }
@@ -123,7 +124,7 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
     };
     const start = () => { if (!frame && canAdvance()) { previous = 0; frame = requestAnimationFrame(tick); } };
     const stop = () => { cancelAnimationFrame(frame); frame = 0; previous = 0; };
-    const seek = () => { stop(); reset(); };
+    const emptied = () => { stop(); reset(); };
     const resize = () => {
       const nextWidth = layer.clientWidth;
       const nextHeight = layer.clientHeight;
@@ -136,7 +137,7 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
     start();
     const observer = new ResizeObserver(resize);
     observer.observe(layer);
-    const events = { playing: start, play: start, seeked: start, canplay: start, pause: stop, ended: stop, waiting: stop, seeking: seek, emptied: seek };
+    const events = { playing: start, play: start, seeked: start, canplay: start, pause: stop, ended: stop, waiting: start, seeking: start, emptied };
     Object.entries(events).forEach(([name, handler]) => video.addEventListener(name, handler));
     return () => { stop(); observer.disconnect(); Object.entries(events).forEach(([name, handler]) => video.removeEventListener(name, handler)); };
   }, [running, available, comments, settings, reducedMotion, source, videoRef, feed]);

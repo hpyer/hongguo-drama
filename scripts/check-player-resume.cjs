@@ -12,9 +12,10 @@ const shortcutSource = transformSync(fs.readFileSync(path.join(__dirname, '../sr
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/Player.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
 function mount({ local = false, saved = null, transcode, prepare, props = {}, episodeCount = 2, storage = new Map(), seriesId = 'A', settings = {}, lockedIndexes = [], apiOverrides = {} } = {}) {
-  props = { setEpisodesOpen() {}, ...props };
+  // Playback fixtures model an explicit play command; target:null exercises passive library entry.
+  props = { setEpisodesOpen() {}, ...((local || saved) ? { target: { seriesId, resume: true, ts: 1 } } : {}), ...props };
   const slots = [], effects = [], cleanups = [], saves = [], prepares = [], transcodes = [], cancelled = [];
-  const releases = [], settingsSaved = [];
+  const releases = [], settingsSaved = [], historyListeners = new Set();
   const events = new Map(), mediaEvents = new Map(), timers = new Map();
   const listenerOptions = new Map(), mediaCalls = { play: 0, pause: 0 };
   const documentEvents = new Map();
@@ -55,6 +56,7 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
     getSeriesEpisodes: async () => ({ success: true, data: { series_id: seriesId, series_title: '测试剧', total: episodeCount, episodes } }),
     getPlaybackPosition: async () => saved,
     savePlaybackPosition: async (...args) => saves.push(args),
+    onWatchHistoryUpdated: listener => { historyListeners.add(listener); return () => historyListeners.delete(listener); },
     prepareOnlinePlay: async p => { prepares.push(p); return prepare ? prepare(p) : { success: true, url: `hongguo-stream://mock-${prepares.length}` }; },
     transcodeForPlayback: async p => { transcodes.push(p); return transcode ? transcode(p) : { success: true, url: 'file:///mock-compat.mp4' }; },
     cancelTranscodeForPlayback: async p => cancelled.push(p),
@@ -107,6 +109,7 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   render();
   return { props, render, flush, find, media, metadata, saves, prepares, transcodes, cancelled, events, timers, listenerOptions, mediaCalls, document, dispatchKey,
     releases, settingsSaved, stage, scrollArea,
+    historyUpdated: payload => [...historyListeners].forEach(listener => listener(payload)),
     flushBatched: async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); render(); },
     transcodeProgress: payload => transcodeProgress?.(payload),
     button: label => find(n => n.type === 'button' && text(n).includes(label)),
@@ -120,6 +123,31 @@ module.exports = { mount };
 if (require.main === module) (async () => {
   let failures = 0;
   const test = async (name, fn) => { if (process.argv[2] && !name.includes(process.argv[2])) return; try { await fn(); console.log(`PASS ${name}`); } catch (e) { failures++; console.error(`FAIL ${name}: ${e.stack}`); } };
+  await test('removed history stays removed through hidden player unload and new playback can record again', async () => {
+    for (const resume of [false, true]) {
+      const ui = mount({ local: true }); await ui.flush(); ui.metadata();
+      ui.media.currentTime = 42; ui.props.active = false; ui.render();
+      ui.historyUpdated({ removedSeriesId: 'A' }); await ui.flush();
+      const afterRemoval = ui.saves.length;
+      ui.events.get('beforeunload')();
+      ui.find(n => n.type === 'video').props.onPause();
+      for (const timer of ui.timers.values()) if (timer.delay === 5000) timer.fn();
+      assert.equal(ui.saves.length, afterRemoval, 'old pause/timer/unload must not restore removed history');
+      if (resume) {
+        ui.props.active = true; ui.render(); await ui.media.play();
+        assert.ok(ui.saves.length > afterRemoval, 'new real playback may create a fresh history record');
+      }
+      const beforeUnmount = ui.saves.length; ui.unmount();
+      if (!resume) assert.equal(ui.saves.length, beforeUnmount, 'hidden player cleanup must not restore removed history');
+    }
+  });
+  await test('history completion forwards valid media duration and the ended event without auto-delete', async () => {
+    const ui = mount({ local: true, episodeCount: 1 }); await ui.flush(); ui.metadata();
+    ui.media.currentTime = 100;
+    ui.find(n => n.type === 'video').props.onEnded(); await ui.flush();
+    assert.ok(ui.saves.some(args => args[1] === 1 && args[2] === 100 && args[3]?.duration === 100 && args[3]?.ended === true));
+    ui.unmount();
+  });
   await test('fullscreen scroll restores the player page after button and Escape exits', async () => {
     const ui = mount(); await ui.flush();
     try {
@@ -262,7 +290,7 @@ if (require.main === module) (async () => {
     ui.unmount();
   });
   await test('network failure refreshes the same episode once and retains position', async () => {
-    const ui = mount({ settings: { cache_next_episode: false } }); await ui.flush(); await ui.button('在线播放').props.onClick(); await ui.flush(); ui.metadata();
+    const ui = mount({ settings: { cache_next_episode: false } }); await ui.flush(); await ui.button('播放本集').props.onClick(); await ui.flush(); ui.metadata();
     ui.media.currentTime = 42; ui.error(2); await ui.flush();
     assert.equal(ui.prepares.length, 2, 'network failure should reconnect once');
     assert.equal(ui.prepares[1].force, true);

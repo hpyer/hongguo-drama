@@ -543,6 +543,7 @@ function upsertSeriesRegistry(data) {
     })),
     updatedAt: Date.now(),
     dismissed: false, // 用户主动移除过；再次登记时自动恢复显示
+    forgotten: false,
   };
   if (idx === -1) seriesRegistry.unshift(entry);
   else seriesRegistry[idx] = { ...seriesRegistry[idx], ...entry, dismissed: false };
@@ -1284,6 +1285,18 @@ ipcMain.handle('remove-series', async (event, seriesId) => {
   return { success: true };
 });
 
+/** 保留播放与文件索引，仅从可恢复的列表中永久移除。 */
+ipcMain.handle('forget-series', async (_event, seriesId) => {
+  try {
+    const sid = String(seriesId);
+    if (!seriesRegistry.some(entry => String(entry.series_id) === sid)) return { success: false, error: '未找到该剧' };
+    const next = seriesRegistry.map(entry => String(entry.series_id) === sid ? { ...entry, dismissed: true, forgotten: true } : entry);
+    store.saveSeries(next);
+    seriesRegistry = next;
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
 /** 批量移除没有下载过任何一集的短剧（清理浏览时留下的空档案） */
 ipcMain.handle('purge-empty-series', async () => {
   let removed = 0;
@@ -1391,13 +1404,13 @@ ipcMain.handle('rescan-downloads', async () => {
 ipcMain.handle('restore-dismissed-series', async () => {
   let n = 0;
   for (const s of seriesRegistry) {
-    if (s.dismissed) { s.dismissed = false; n++; }
+    if (s.dismissed && !s.forgotten) { s.dismissed = false; n++; }
   }
   if (n > 0) saveSeriesRegistry();
   return { success: true, count: n };
 });
 
-ipcMain.handle('dismissed-count', async () => seriesRegistry.filter((s) => s.dismissed).length);
+ipcMain.handle('dismissed-count', async () => seriesRegistry.filter((s) => s.dismissed && !s.forgotten).length);
 
 // ===== 一键合并（ffmpeg concat 流复制，无损且快）=====
 let mergeTasks = []; // { id, seriesId, seriesTitle, status, progress, output, total, done, error }
@@ -1876,12 +1889,12 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
 });
 
 // 断点续播
-ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, currentTime) => {  try {
+ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, currentTime, metadata) => {  try {
     const map = store.getPlayback() || {};
     const sid = String(seriesId);
     const series = seriesRegistry.find(item => String(item.series_id) === sid);
     if (!series) return { success: false, error: '未找到短剧档案' };
-    map[sid] = watchHistory.recordPlayback(map[sid], series, Number(vidIndex), Number(currentTime));
+    map[sid] = watchHistory.recordPlayback(map[sid], series, Number(vidIndex), Number(currentTime), Date.now(), metadata);
     store.savePlayback(map);
     return { success: true };
   } catch (error) {
@@ -1903,8 +1916,9 @@ ipcMain.handle('play-series', async (event, payload) => {
   const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
   if (!entry) return { success: false, error: '未找到短剧档案，请重新打开详情' };
   if (payload?.resume === true && entry.dismissed) {
-    try { entry.dismissed = false; saveSeriesRegistry(); }
-    catch (error) { entry.dismissed = true; return { success: false, error: error.message }; }
+    const wasForgotten = entry.forgotten;
+    try { entry.dismissed = false; entry.forgotten = false; saveSeriesRegistry(); }
+    catch (error) { entry.dismissed = true; entry.forgotten = wasForgotten; return { success: false, error: error.message }; }
   }
   sendToRenderer('navigate', {
     page: 'player',
@@ -2391,7 +2405,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
   let quality;
   try { quality = playbackQuality(payload.quality, vid); } catch (error) { return { success: false, error: error.message }; }
   const sourceVid = String(vid), key = onlineCacheKey(sourceVid, quality), streamId = randomUUID();
-  const session = { vid: sourceVid, cacheKey: key, requestId, requests: new Set(), entry: null };
+  const session = { vid: sourceVid, seriesId: String(seriesId || ''), vidIndex: Number(vidIndex), cacheKey: key, requestId, requests: new Set(), entry: null };
   onlineSessions.set(streamId, session);
   try {
     checkCustomAccess(sourceVid);
@@ -3071,10 +3085,12 @@ async function refreshWatchHistory(force = false) {
         const knownSequels = new Set((previousRecord.sequels || []).map(item => item.series_id));
         const newSequel = candidates?.some(item => !knownSequels.has(item.series_id));
         if (fresh.episodes.length >= oldSeries.episodes.length) {
-          const wasDismissed = oldSeries.dismissed === true;
+          const currentSeries = seriesRegistry.find(item => String(item.series_id) === sid);
+          const wasDismissed = currentSeries?.dismissed === true;
+          const wasForgotten = currentSeries?.forgotten === true;
           upsertSeriesRegistry(fresh);
           if (wasDismissed) {
-            seriesRegistry.find(item => String(item.series_id) === sid).dismissed = true;
+            Object.assign(seriesRegistry.find(item => String(item.series_id) === sid), { dismissed: true, forgotten: wasForgotten });
             saveSeriesRegistry();
           }
         }
@@ -3109,6 +3125,16 @@ async function refreshWatchHistory(force = false) {
   })().catch(error => ({ success: false, error: error.message })).finally(() => { historyRefresh = null; });
   return historyRefresh;
 }
+
+ipcMain.handle('remove-watch-history', async (_event, seriesId) => {
+  try {
+    const map = { ...store.getPlayback() };
+    delete map[String(seriesId)];
+    store.savePlayback(map);
+    sendToRenderer('watch-history-updated', { removedSeriesId: String(seriesId) });
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
 
 ipcMain.handle('get-watch-history', async () => ({ success: true, results: historyRows() }));
 ipcMain.handle('refresh-watch-history', async () => refreshWatchHistory(true));
@@ -3470,10 +3496,11 @@ ipcMain.handle('delete-series-files', async (event, seriesId, options) => {
 });
 
 /** 删除单集本地文件（看完即删用） */
-ipcMain.handle('delete-episode-file', async (event, seriesId, vidIndex) => {
+async function deleteEpisodeFile(seriesId, vidIndex) {
   try {
     const sid = String(seriesId);
     const idx = Number(vidIndex);
+    if (!sid || !Number.isSafeInteger(idx) || idx < 1) return { success: false, error: '剧集信息无效', count: 0, freed: 0 };
     const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === sid && Number(task.hongguoInfo?.vid_index) === idx);
     if (tasks.some(isTaskInFlight) || mergeTasks.some(task => task.seriesId === sid && task.status === 'running')) return { success: false, error: '该集正在下载或合并，暂不删除', count: 0, freed: 0 };
     const entry = seriesRegistry.find(item => String(item.series_id) === sid);
@@ -3493,6 +3520,40 @@ ipcMain.handle('delete-episode-file', async (event, seriesId, vidIndex) => {
   } catch (error) {
     return { success: false, error: error.message };
   }
+}
+
+ipcMain.handle('delete-episode-file', (_event, seriesId, vidIndex) => deleteEpisodeFile(seriesId, vidIndex));
+
+/** 前端先释放看完的媒体；只清本集，不影响预缓存的下一集。 */
+ipcMain.handle('cleanup-watched-episode', async (_event, seriesId, vidIndex) => {
+  try {
+    const sid = String(seriesId), idx = Number(vidIndex);
+    if (!sid || !Number.isSafeInteger(idx) || idx < 1) return { success: false, error: '剧集信息无效' };
+    const matches = entry => entry && String(entry.seriesId) === sid && Number(entry.vidIndex) === idx;
+    const compatFiles = ['auto', '720p', '1080p'].map(quality => compatPathFor(sid, idx, quality));
+    if ([...onlineSessions.values()].some(session => matches(session.entry || session)) || compatFiles.some(file => compatPreparing.has(file))) {
+      return { success: false, error: '该集仍在播放或准备，稍后再清理' };
+    }
+    const result = await deleteEpisodeFile(sid, idx);
+    if (!result.success) return result;
+    for (const [key, entry] of [...onlineCache]) {
+      if (!matches(entry)) continue;
+      const bytes = entry.size || 0;
+      deleteOnlineCacheEntry(key);
+      if (entry.filePath && fs.existsSync(entry.filePath)) { onlineCache.set(key, entry); result.failed++; continue; }
+      result.freed += bytes;
+      result.count++;
+    }
+    for (const file of compatFiles) {
+      if (isFileInUse(file)) { result.failed++; continue; }
+      try {
+        if (fs.existsSync(file)) { const size = fs.statSync(file).size; fs.unlinkSync(file); result.freed += size; result.count++; }
+      } catch (_) { result.failed++; }
+    }
+    result.success = !result.failed;
+    if (!result.success) result.error = '部分缓存清理失败，请稍后重试';
+    return result;
+  } catch (error) { return { success: false, error: error.message }; }
 });
 
 /** 各处磁盘占用统计（用于展示「可释放多少」） */

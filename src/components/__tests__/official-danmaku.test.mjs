@@ -75,11 +75,11 @@ test('弹幕只在时间到点时投放，不会提前出现', () => {
   assert.equal(state.items[0].text, '十秒');
 });
 
-test('全屏和半屏用相邻文字行排布，不把少数轨道拉成大空档', () => {
+test('全屏和半屏在已有轨道放不下时扩展相邻行，不拉大行距', () => {
   for (const area of ['half', 'full']) {
     const state = makeFeed().animation;
     const settings = { ...DEFAULT_DANMAKU_SETTINGS, area };
-    const list = Array.from({ length: 40 }, () => at(0, '短弹幕'));
+    const list = Array.from({ length: 40 }, () => at(0, '长'.repeat(70)));
     playTo(state, list, 0, 4, options(settings, { width: 1987, height: 1248 }));
     const rows = [...new Set(state.items.map(item => item.y))].sort((a, b) => a - b);
     assert.ok(rows.length >= 10, `${area} 应能使用至少十行，实际 ${rows.length}`);
@@ -88,13 +88,30 @@ test('全屏和半屏用相邻文字行排布，不把少数轨道拉成大空�
   }
 });
 
+test('密集半屏短弹幕复用已有空位，不因还有空行而留下整屏横向空档', () => {
+  const state = makeFeed().animation;
+  const settings = { ...DEFAULT_DANMAKU_SETTINGS, area: 'half', density: 'dense', fontSize: 20, opacity: 25, speed: 2 };
+  const runtime = options(settings, { width: 1987, height: 1248 });
+  const list = Array.from({ length: 10 }, (_, index) => at(index * 0.7, `弹幕${index}`));
+  playTo(state, list, 0, 6.4, runtime);
+  assert.equal(state.nextId, list.length, '每条到点弹幕只投放一次');
+  assert.deepEqual(state.items.map(item => item.content), list.map(item => item.text));
+  assert.equal(new Set(state.items.map(item => item.lane)).size, 1, '前条已让出安全空位时应接在同一行');
+  for (let index = 1; index < state.items.length; index++) {
+    const older = state.items[index - 1];
+    const newer = state.items[index];
+    const gap = newer.x - older.x - older.width;
+    assert.ok(gap >= 24 - 1e-6 && gap <= 45, `到点即续发且保持安全间距，实际 ${gap}`);
+  }
+});
+
 test('三个密度档都提高突发投放量，并保持递增', () => {
   const counts = ['sparse', 'normal', 'dense'].map((density, i) => {
     const state = makeFeed().animation;
     const settings = { ...DEFAULT_DANMAKU_SETTINGS, density, area: 'full' };
-    playTo(state, Array.from({ length: 80 }, () => at(0, '长'.repeat(70))), 0, 4,
+    playTo(state, Array.from({ length: 80 }, () => at(0, '长'.repeat(70))), 0, 1,
       options(settings, { width: 1987, height: 1248 }));
-    assert.ok(state.nextId >= [5, 10, 20][i], `${density} 投放量不足：${state.nextId}`);
+    assert.ok(state.nextId >= [3, 6, 15][i], `${density} 投放量不足：${state.nextId}`);
     return state.nextId;
   });
   assert.ok(counts[0] < counts[1] && counts[1] < counts[2]);
@@ -121,7 +138,7 @@ test('进入和退出全屏保留在屏弹幕、时间光标与播放进度', ()
   }
 });
 
-test('倒退跳转：重建光标并清掉属于旧位置的弹幕', () => {
+test('倒退跳转：重建后续光标并保留在屏弹幕', () => {
   const state = makeFeed().animation;
   const list = [at(1, 'a'), at(2, 'b'), at(30, 'c')];
   playTo(state, list, 0, 3, options());
@@ -131,7 +148,7 @@ test('倒退跳转：重建光标并清掉属于旧位置的弹幕', () => {
 
   // 跳回 1.5 秒：1.5 秒之后、含 2 秒的弹幕应重新可发
   advanceTimedDanmaku(state, list, 1.5, 0, options());
-  assert.equal(state.items.length, 0, '跳转必须清掉旧位置的在屏弹幕');
+  assert.equal(state.items.length, 2, '跳转时在屏弹幕继续自然滚动');
   assert.equal(state.cursor, 1, '光标应回到 1.5 秒对应的位置');
 });
 
@@ -211,7 +228,7 @@ test('突发弹幕不会互相追尾：同道内前后两条始终保持间距',
     }
   }
   assert.ok(peak > 3, `通道应被复用，实际峰值只有 ${peak}`);
-  assert.ok(peak <= 20, `突发投放应受迟到窗口与间隔限制，实际峰值 ${peak}`);
+  assert.ok(peak <= Math.ceil(5 / 0.15) + 1, `突发投放应受迟到窗口与间隔限制，实际峰值 ${peak}`);
   assert.ok(checked > 0, '应至少检查到一对同道弹幕');
 });
 
@@ -223,7 +240,9 @@ test('多道模式下同屏弹幕不重叠', () => {
   const items = state.items;
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
-      assert.ok(Math.abs(items[i].y - items[j].y) >= settings.fontSize + 12, '同屏弹幕不得压行');
+      const a = items[i], b = items[j];
+      assert.ok(Math.abs(a.y - b.y) >= settings.fontSize + 12 ||
+        a.x >= b.x + b.width + 24 - 1e-6 || b.x >= a.x + a.width + 24 - 1e-6, '同屏弹幕不得重叠');
     }
   }
 });
@@ -303,4 +322,75 @@ test('部分结果与截断结果始终说明限制', () => {
     appendOfficialPage(feed, { success: true, series_id: SERIES, episode_id: VID, items: [], [flag]: true });
     assert.match(feed.notice, /部分|限制/);
   }
+});
+
+
+test('backward seek never duplicates a comment that is still visible', () => {
+  const state = makeFeed().animation;
+  const list = [at(1, 'keep rolling')];
+  advanceTimedDanmaku(state, list, 1, 0.016, options());
+  const id = state.items[0].id;
+  advanceTimedDanmaku(state, list, 0.5, 0, options());
+  advanceTimedDanmaku(state, list, 1, 0.5, options());
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0].id, id);
+});
+
+
+test('少量时间轴弹幕轮播补空档，新到点优先且不提前或同屏重复', () => {
+  const state = makeFeed().animation;
+  const list = [at(0, '甲'), at(0.2, '乙'), at(0.4, '丙'), at(20, '新内容')];
+  const runtime = options({ ...DEFAULT_DANMAKU_SETTINGS, density: 'dense', speed: 2 }, { width: 500, height: 300 });
+  const seen = new Set();
+  let replayed = false;
+  for (let frame = 0; frame < 2400; frame++) {
+    const time = frame / 60;
+    advanceTimedDanmaku(state, list, time, 1 / 60, runtime);
+    if (time > 1) assert.ok(state.items.length > 0, `不能空屏: ${time}`);
+    assert.equal(new Set(state.items.map(item => item.content)).size, state.items.length);
+    for (const item of state.items) {
+      assert.ok(item.entry.time <= time);
+      if (!seen.has(item.id)) { if (item.entry === list[0] && item.id > 0) replayed = true; seen.add(item.id); }
+    }
+    if (time > 20.1 && time < 20.2) assert.ok(state.items.some(item => item.entry === list[3]));
+  }
+  assert.ok(replayed);
+  assert.equal(state.cursor, list.length);
+  runtime.settings = { ...runtime.settings, blockedWords: '甲,乙,丙,新内容' };
+  state.items = [];
+  playTo(state, list, 40, 50, runtime);
+  assert.equal(state.items.length, 0, '轮播不得绕过屏蔽词');
+});
+
+test('密集模式新弹幕供应充足时不轮播', () => {
+  const state = makeFeed().animation;
+  const list = Array.from({ length: 800 }, (_, i) => at(i / 10, `真实${i}`));
+  const runtime = options({ ...DEFAULT_DANMAKU_SETTINGS, density: 'dense', speed: 2 });
+  const entries = new Set(); const ids = new Set();
+  for (let frame = 0; frame < 2400; frame++) {
+    advanceTimedDanmaku(state, list, frame / 60, 1 / 60, runtime);
+    for (const item of state.items) if (!ids.has(item.id)) {
+      assert.ok(!entries.has(item.entry), '供应充足不能轮播');
+      entries.add(item.entry); ids.add(item.id);
+    }
+  }
+});
+
+
+test('轮播遇到快进、倒退和缓冲保留在屏内容，暂停不补发', () => {
+  const state = makeFeed().animation;
+  const list = [at(0, '甲'), at(0.2, '乙'), at(0.4, '丙')];
+  const runtime = options({ ...DEFAULT_DANMAKU_SETTINGS, density: 'dense', speed: 2 }, { width: 500, height: 300 });
+  playTo(state, list, 0, 8, runtime);
+  assert.ok(state.nextId > 3);
+  const ids = state.items.map(item => item.id);
+  advanceTimedDanmaku(state, list, 50, 0.016, runtime);
+  assert.ok(ids.every(id => state.items.some(item => item.id === id)));
+  advanceTimedDanmaku(state, list, 0.1, 0.016, runtime);
+  assert.ok(ids.every(id => state.items.some(item => item.id === id)));
+  const nextId = state.nextId;
+  advanceTimedDanmaku(state, list, 0.1, 0.1, { ...runtime, emitting: false });
+  assert.equal(state.nextId, nextId);
+  advanceTimedDanmaku(state, list, 0.1, 0, runtime);
+  assert.equal(state.nextId, nextId);
 });

@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { transformSync } = require('esbuild');
 const root = path.join(__dirname, '../src/components');
 
-function mount() {
+function mount(kind = 'official') {
   const slots = [], effects = [], cleanups = [], frames = new Map();
   let cursor = 0, dirty = false, nextFrame = 0, tree, resize;
   const changed = (old, deps) => !old || deps.some((v, i) => !Object.is(v, old[i]));
@@ -38,13 +38,14 @@ function mount() {
     return module.exports;
   }
   const model = load(path.join(root, 'danmakuOfficial.mjs'));
-  const { DEFAULT_DANMAKU_SETTINGS } = load(path.join(root, 'danmakuModel.mjs'));
-  const feed = model.createOfficialFeed('1234567', '2345678');
-  feed.danmaku.push({ time: 0, text: '全屏切换时保留这条弹幕', color: '#FFFFFF' });
+  const { DEFAULT_DANMAKU_SETTINGS, createCommentFeed } = load(path.join(root, 'danmakuModel.mjs'));
+  const feed = kind === 'official' ? model.createOfficialFeed('1234567', '2345678') : createCommentFeed('1234567', '2345678');
+  if (kind === 'official') feed.danmaku.push({ time: 0, text: '全屏切换时保留这条弹幕', color: '#FFFFFF' });
+  else feed.comments.push({ content: 'Keep this visible comment rolling' });
   feed.loaded = true;
   const props = { videoRef: { current: media }, source: 'current-video', available: true,
-    danmaku: { running: true, enabled: true, active: true, supported: true, settings: DEFAULT_DANMAKU_SETTINGS, feed, status: '', error: '', loading: false } };
-  const Component = load(path.join(root, 'OfficialDanmaku.jsx')).default;
+    danmaku: { running: true, enabled: true, active: true, supported: true, settings: DEFAULT_DANMAKU_SETTINGS, feed, comments: feed.comments, status: '', error: '', loading: false } };
+  const Component = load(path.join(root, kind === 'official' ? 'OfficialDanmaku.jsx' : 'CommentDanmaku.jsx')).default;
   const attach = node => {
     if (!node || typeof node !== 'object') return;
     if (typeof node.props.ref === 'function') node.props.ref({ style: {} });
@@ -104,19 +105,38 @@ test('waiting and playing around fullscreen keep existing overlay', () => {
   } finally { ui.unmount(); }
 });
 
-test('explicit seeking and source changes still clear old overlay', () => {
+test('forward and backward seeks preserve and animate visible comments without emitting skipped comments', () => {
   for (const time of [0.05, 30]) {
     const ui = mount();
     try {
-      ui.media.seeking = true; ui.event('seeking'); assert.equal(ui.feed.animation.items.length, 0);
-      ui.media.currentTime = time; ui.media.seeking = false; ui.event('seeked'); ui.tick(time, 600);
-      assert.equal(ui.feed.animation.items.length, 0, 'old time zero overlay must not be replayed after seeking');
-      assert.equal(ui.feed.animation.cursor, 1);
+      const before = ids(ui), x = ui.feed.animation.items[0].x;
+      ui.feed.danmaku.push({time: 5, text: 'skipped'}, {time: 30, text: 'new position'});
+      ui.media.seeking = true; ui.media.readyState = 1; ui.event('seeking');
+      assert.deepEqual(ids(ui), before, 'seeking must not clear visible comments');
+      ui.tick(time, 500);
+      assert.ok(ui.feed.animation.items[0].x < x, 'visible comments keep rolling while media seeks');
+      assert.deepEqual(ids(ui), before, 'no comments are emitted during unstable seek time');
+      ui.media.seeking = false; ui.media.readyState = 4; ui.event('seeked'); ui.tick(time, 600);
+      assert.ok(before.every(id => ids(ui).includes(id)), 'seek completion preserves original visible comments');
+      assert.ok(!ui.feed.animation.items.some(item => item.text === 'skipped'));
+      if (time === 30) assert.ok(ui.feed.animation.items.some(item => item.text === 'new position'));
+      ui.media.paused = true; ui.event('pause'); const pausedX = ui.feed.animation.items[0].x;
+      ui.tick(time, 900); assert.equal(ui.feed.animation.items[0].x, pausedX, 'explicit pause still freezes comments');
     } finally { ui.unmount(); }
   }
   const ui = mount();
   try { ui.props.source = 'another-video'; ui.render(); assert.equal(ui.feed.animation.items.length, 0); }
   finally { ui.unmount(); }
+});
+
+test('brief buffering keeps comments moving and emptied clears the old source', () => {
+  const ui = mount();
+  try {
+    const before = ids(ui), x = ui.feed.animation.items[0].x;
+    ui.media.readyState = 1; ui.event('waiting'); ui.tick(0.2, 500);
+    assert.deepEqual(ids(ui), before); assert.ok(ui.feed.animation.items[0].x < x);
+    ui.event('emptied'); assert.equal(ui.feed.animation.items.length, 0);
+  } finally { ui.unmount(); }
 });
 
 
@@ -186,4 +206,18 @@ test('temporary hidden state keeps overlay mounted and frozen; explicit disable 
       ui.props.danmaku.running = true; ui.render();
     }
   } finally { ui.unmount(); }
+});
+
+test('comment-source overlays also keep moving through forward/backward seek and buffering', () => {
+ const ui = mount('comments');
+ try {
+  const before = ids(ui);
+  for (const time of [30, 0.1]) {
+   ui.media.seeking = true; ui.media.readyState = 1; ui.event('seeking');
+   const x = ui.feed.animation.items[0]?.x; assert.deepEqual(ids(ui), before);
+   ui.tick(time, time === 30 ? 500 : 900); assert.ok(ui.feed.animation.items[0].x < x);
+   ui.media.seeking = false; ui.media.readyState = 4; ui.event('seeked');
+  }
+  ui.event('emptied'); assert.equal(ui.feed.animation.items.length, 0);
+ } finally { ui.unmount(); }
 });

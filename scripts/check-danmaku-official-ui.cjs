@@ -96,8 +96,7 @@ function mount({ response, enabled = true } = {}) {
   assert.match(overlay, /advanceTimedDanmaku\(state, list, video.currentTime/);
   const settings = fs.readFileSync(path.join(root, 'Settings.jsx'), 'utf8');
   assert.match(settings, /openExternalUrl\('https:\/\/github.com\/dawei233\/hongguo-drama'\)/);
-  const controls = fs.readFileSync(path.join(root, 'PlayerControls.jsx'), 'utf8');
-  assert.match(controls, /if \(\[shortcuts.backward, shortcuts.forward\].includes\(key\)\) scheduleHide\(\);/);
-  assert.match(controls, /timer = setTimeout\(hide, 2000\)/);
-  console.log('PASS frontend source wiring: default/selective fetch/shared preferences/retry/stale response/episode switch/control-bar bounds/2.8 keyboard preservation');
+  // check-player-controls.cjs verifies the 2.9 one-second pointer idle deadline,
+  // including playback keys and fullscreen/source changes that must not renew it.
+  console.log('PASS frontend source wiring: default/selective fetch/shared preferences/retry/stale response/episode switch/control-bar bounds/source attribution');
 })().catch(error => { console.error(error); process.exitCode = 1; });

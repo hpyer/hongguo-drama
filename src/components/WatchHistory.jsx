@@ -7,10 +7,14 @@ export default function WatchHistory({ active = true, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [opening, setOpening] = useState('');
+  const [removing, setRemoving] = useState('');
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [filter, setFilter] = useState('all');
   const request = useRef(0);
   const openingRef = useRef(false);
+  const completedCount = rows.filter(row => row.completed === true).length;
+  const visibleRows = rows.filter(row => filter === 'all' || (row.completed === true) === (filter === 'completed'));
 
   const load = async () => {
     const version = ++request.current;
@@ -42,6 +46,18 @@ export default function WatchHistory({ active = true, onNavigate }) {
     finally { setChecking(false); }
   };
 
+  const remove = async (row) => {
+    setRemoving(row.series_id); setError(''); setStatus('');
+    try {
+      const result = await window.electronAPI.removeWatchHistory(row.series_id);
+      if (!result?.success) throw new Error(result?.error || '移除失败，请重试');
+      request.current++;
+      setRows(current => current.filter(item => item.series_id !== row.series_id));
+      setStatus(`已移除《${row.series_title}》的观看记录，视频文件不受影响。`);
+    } catch (failure) { setError(failure.message || '移除失败，请重试'); }
+    finally { setRemoving(''); }
+  };
+
   const resume = async (row, sequel = null) => {
     if (openingRef.current) return;
     openingRef.current = true;
@@ -68,18 +84,30 @@ export default function WatchHistory({ active = true, onNavigate }) {
   return <section className="history-container" aria-labelledby="history-title">
     <div className="history-header">
       <div><h1 id="history-title">观看记录</h1><p>继续上次的故事。记录仅保存在这台电脑。</p></div>
-      <button className="btn btn-outline" onClick={checkUpdates} disabled={checking || loading || !rows.length}>
+      <button className="btn btn-outline" onClick={checkUpdates} disabled={checking || loading || !!removing || !rows.length}>
         <RefreshCw size={15} className={checking ? 'spin' : ''} />{checking ? '正在检查更新…' : '检查更新'}
       </button>
     </div>
     <p className="history-hint">运行期间自动检查新集；不同剧号的新一季标为“疑似续作”。可在设置中关闭检测或开启系统通知。</p>
+    <div className="history-filter" role="group" aria-label="观看进度筛选">
+      {[
+        ['all', '全部', rows.length],
+        ['unfinished', '未看完', rows.length - completedCount],
+        ['completed', '已看完', completedCount],
+      ].map(([value, label, count]) => <button key={value} type="button" aria-pressed={filter === value} disabled={loading} onClick={() => setFilter(value)}>{label} {count}</button>)}
+    </div>
+    <p className="history-hint">按当前最后一集的片尾进度判断；旧记录可能显示未看完。</p>
     {error && <div className="history-error" role="alert"><span>{error}</span><button className="btn btn-outline btn-sm" onClick={load}>重新加载</button></div>}
     {status && <p className="history-hint" role="status">{status}</p>}
     {loading ? <p role="status">正在读取观看记录…</p> : !rows.length ? <div className="history-empty">
       <Clock size={30} /><h2>还没有观看记录</h2><p>真正开始播放后，短剧和进度会出现在这里。</p>
       <button className="btn btn-primary" onClick={() => onNavigate?.('browse')}>去发现短剧</button>
-    </div> : <ul className="history-list">{rows.map(row => <li className="history-row" key={row.series_id}>
-      <button className="history-resume" onClick={() => resume(row)} disabled={!!opening} aria-label={`继续观看 ${row.series_title} 第${row.vid_index}集${row.hasUpdates ? `，有更新${row.unreadEpisodes ? `，新增${row.unreadEpisodes}集` : '，发现疑似续作'}` : ''}`}>
+    </div> : !visibleRows.length ? <div className="history-empty" role="status">
+      <Clock size={30} /><h2>{filter === 'completed' ? '还没有已看完的短剧' : '没有未看完的短剧'}</h2>
+      <button type="button" className="btn btn-outline" onClick={() => setFilter('all')}>查看全部</button>
+    </div> : <ul className="history-list">{visibleRows.map(row => <li className="history-row" key={row.series_id}>
+      <div className="history-main">
+      <button className="history-resume" onClick={() => resume(row)} disabled={!!opening || !!removing} aria-label={`继续观看 ${row.series_title} 第${row.vid_index}集${row.hasUpdates ? `，有更新${row.unreadEpisodes ? `，新增${row.unreadEpisodes}集` : '，发现疑似续作'}` : ''}`}>
         {row.cover ? <img className="history-cover" src={row.cover} alt="" loading="lazy" /> : <span className="history-cover history-cover-empty"><Play size={20} /></span>}
         <span className="history-copy">
           <span className="history-name">{row.hasUpdates && <span className="history-dot" role="img" aria-label="有更新" />}{row.series_title}</span>
@@ -89,7 +117,9 @@ export default function WatchHistory({ active = true, onNavigate }) {
         </span>
         <span className="history-action"><Play size={15} />{opening === row.series_id ? '打开中…' : '继续观看'}</span>
       </button>
-      {!!row.sequels?.length && <div className="history-sequels"><span>疑似续作</span>{row.sequels.map(sequel => <button key={sequel.series_id} className="btn btn-outline btn-sm" disabled={!!opening} onClick={() => resume(row, sequel)}>{sequel.series_title}</button>)}</div>}
+      <button type="button" className="btn btn-outline btn-sm history-remove" disabled={!!removing || !!opening} aria-label={`移除观看记录《${row.series_title}》`} title="仅移除观看记录，不删除视频文件" onClick={() => remove(row)}>{removing === row.series_id ? '移除中…' : '移除'}</button>
+      </div>
+      {!!row.sequels?.length && <div className="history-sequels"><span>疑似续作</span>{row.sequels.map(sequel => <button key={sequel.series_id} className="btn btn-outline btn-sm" disabled={!!opening || !!removing} onClick={() => resume(row, sequel)}>{sequel.series_title}</button>)}</div>}
       {row.lastCheckError && <p className="history-check-error">更新检查未完成：{row.lastCheckError}</p>}
     </li>)}</ul>}
   </section>;

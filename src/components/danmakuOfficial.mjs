@@ -2,7 +2,7 @@
 // https://github.com/dawei233/hongguo-drama
 // 时间轴投放与评论队列分开；两种来源共用视觉设置、轨道布局和窗口重排。
 
-import { commentIsBlocked, danmakuLayout } from './danmakuModel.mjs';
+import { commentIsBlocked, danmakuLayout, retireDanmaku, takeDanmakuReplay } from './danmakuModel.mjs';
 
 export const DANMAKU_SOURCES = Object.freeze(['official', 'comments']);
 
@@ -26,7 +26,7 @@ const LANE_HEAD_GAP = 24;
 const MAX_EMIT_PER_FRAME = 4;
 
 // 时间轴控制出场时机；密度控制突发时的最小间隔，不限制为固定几行。
-const EMIT_INTERVAL = Object.freeze({ sparse: 0.75, normal: 0.3, dense: 0.1 });
+const EMIT_INTERVAL = Object.freeze({ sparse: 0.4, normal: 0.15, dense: 0.05 });
 
 /** 严重迟到的弹幕直接丢弃：它们在时间轴上已经过去了，补发只会突兀。 */
 const STALE_SECONDS = 5;
@@ -44,7 +44,7 @@ const REDUCED_MOTION_READ_SECONDS = 6;
  * 认定"用户跳转了进度"的条件。
  *
  * 正常播放时 `currentTime` 的增量约等于本帧的媒体时间增量；一旦出现负数增量
- * 或远超增量的正跳变，就只能是 seek。这个判断决定了要不要重建光标与清屏，
+ * 或远超增量的正跳变，就只能是 seek。这个判断只决定要不要重建后续投放光标，
  * 判错会导致快进后把中间整段弹幕一次性倒到屏幕上。
  */
 function isSeek(lastTime, currentTime, elapsed) {
@@ -132,23 +132,20 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
   const delta = Math.min(Math.max(elapsed, 0), 0.25);
   let changed = false;
 
-  if (isSeek(state.lastTime, currentTime, elapsed)) {
-    // 跳转后必须重建：光标对齐到新位置，在屏弹幕全部作废（它们属于跳转前的时间点）。
-    // 这里**不能**提前 return —— 否则跳转那一帧不投放任何弹幕，跳过去要等下一帧
-    // 才出画面，观感上像卡了一下。
+  const emitting = options.emitting !== false;
+  if (emitting && isSeek(state.lastTime, currentTime, elapsed)) {
+    // Reposition future comments without erasing comments already crossing the screen.
     state.cursor = lowerBoundTime(list, currentTime);
-    if (state.items.length) changed = true; // 只有真的清了屏才算需要重绘
-    state.items = [];
     state.cooldown = 0;
   }
-  state.lastTime = currentTime;
+  if (emitting) state.lastTime = currentTime;
 
   const before = state.items.length;
   for (const item of state.items) {
     item.age += delta;
     if (!reducedMotion) item.x -= 85 * settings.speed * delta;
   }
-  state.items = state.items.filter(item => (reducedMotion ? item.age < REDUCED_MOTION_READ_SECONDS : item.x + item.width > 0));
+  retireDanmaku(state, reducedMotion);
   if (state.items.length !== before) changed = true;
   state.cooldown = Math.max(0, state.cooldown - delta);
 
@@ -165,21 +162,29 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
 
   let emitted = 0;
   const staleAfter = reducedMotion ? REDUCED_MOTION_READ_SECONDS : STALE_SECONDS;
-  while (state.cursor < list.length && emitted < MAX_EMIT_PER_FRAME) {
-    const entry = list[state.cursor];
-    if (!(entry.time <= currentTime)) break;
-
-    const stale = currentTime - entry.time > staleAfter;
-    const blocked = commentIsBlocked(entry.text, settings);
-    if (blocked || stale) {
+  while (emitting && emitted < MAX_EMIT_PER_FRAME) {
+    let entry = list[state.cursor];
+    const timed = entry && entry.time <= currentTime;
+    const stale = timed && currentTime - entry.time > staleAfter;
+    const blocked = timed && commentIsBlocked(entry.text, settings);
+    const visible = timed && state.items.some(item => item.entry === entry);
+    if (blocked || stale || visible) {
       state.cursor++;
       continue;
     }
     if (state.cooldown > 0) break;
 
     const candidates = Array.from({ length: lanes }, (_, index) => index);
-    const lane = candidates.find(index => !state.items.some(item => item.lane === index)) ?? candidates.find(laneFree);
+    // 先复用已有行的安全空位，放不下再扩行，避免短弹幕被摊成整屏横向空档。
+    const lane = candidates.find(laneFree);
     if (lane === undefined) break; // 保留 cursor，下一帧再试
+    if (!timed) {
+      if (!(delta > 0) || !list.length) break;
+      // Nearby fresh supply takes priority; only quiet stretches need retired comments.
+      const pending = lowerBoundTime(list, currentTime + 2) - state.cursor;
+      entry = takeDanmakuReplay(state, options, Math.max(0, pending), currentTime)?.entry;
+      if (!entry) break;
+    }
 
     const chars = Array.from(entry.text);
     const text = chars.length > 80 ? `${chars.slice(0, 79).join('')}…` : entry.text;
@@ -188,6 +193,7 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
       id: state.nextId++,
       text,
       content: entry.text,
+      entry,
       color: entry.color,
       mode: entry.mode,
       lane,
@@ -197,7 +203,7 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
       age: 0,
     });
     state.cooldown = reducedMotion ? REDUCED_MOTION_READ_SECONDS : (EMIT_INTERVAL[settings.density] ?? EMIT_INTERVAL.normal);
-    state.cursor++;
+    if (timed) state.cursor++;
     emitted++;
     changed = true;
   }

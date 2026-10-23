@@ -129,6 +129,7 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
   useEffect(() => {
     feed.animation.lastTime = undefined;
     feed.animation.items = [];
+    feed.animation.replayQueue = [];
     setItems([]);
   }, [source, feed, enabled, active, supported, available, settings.fontSize, settings.area, settings.density, reducedMotion]);
 
@@ -150,20 +151,23 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
       const node = nodes.current.get(item.id);
       if (node) node.style.transform = `translate(${item.x}px, ${item.y}px)`;
     });
-    const canAdvance = () => !video.paused && !video.ended && !video.seeking && video.readyState >= 2 && !document.hidden;
-    const tick = () => {
+    const canAnimate = () => !video.paused && !video.ended && !document.hidden;
+    let lastFrame;
+    const tick = now => {
       frame = 0;
-      if (!canAdvance()) return;
-      // Fullscreen can suspend frames while media advances; only seeking events reset the timeline.
-      const delta = state.lastTime === undefined ? 0 : Math.max(0, video.currentTime - state.lastTime);
-      if (advanceTimedDanmaku(state, list, video.currentTime, delta, options())) setItems([...state.items]);
+      if (!canAnimate()) return;
+      // Wall time keeps existing comments smooth while a seek or buffer stalls the media clock.
+      const delta = lastFrame === undefined ? 0 : Math.max(0, (now - lastFrame) / 1000) * video.playbackRate;
+      lastFrame = now;
+      const emitting = !video.seeking && video.readyState >= 2;
+      if (advanceTimedDanmaku(state, list, video.currentTime, delta, { ...options(), emitting })) setItems([...state.items]);
       paint();
-      frame = requestAnimationFrame(tick);
+      if (emitting || state.items.length) frame = requestAnimationFrame(tick);
     };
-    const start = () => { if (!frame && canAdvance()) frame = requestAnimationFrame(tick); };
-    const stop = () => { cancelAnimationFrame(frame); frame = 0; };
-    // 让下一帧重新对齐：跳转后必须重建光标，否则会把中间整段弹幕一次性倒出来
-    const seek = () => { stop(); state.lastTime = undefined; state.items = []; setItems([]); };
+    const start = () => { if (!frame && canAnimate()) frame = requestAnimationFrame(tick); };
+    const stop = () => { cancelAnimationFrame(frame); frame = 0; lastFrame = undefined; };
+    const seek = () => { state.lastTime = undefined; start(); };
+    const emptied = () => { stop(); state.lastTime = undefined; state.items = []; state.replayQueue = []; setItems([]); };
     const resize = () => {
       const nextWidth = layer.clientWidth;
       const nextHeight = layer.clientHeight;
@@ -177,7 +181,7 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
     start();
     const observer = new ResizeObserver(resize);
     observer.observe(layer);
-    const events = { playing: start, play: start, seeked: start, canplay: start, pause: stop, ended: stop, waiting: stop, seeking: seek, emptied: seek };
+    const events = { playing: start, play: start, seeked: seek, canplay: start, pause: stop, ended: stop, waiting: start, seeking: seek, emptied };
     Object.entries(events).forEach(([name, handler]) => video.addEventListener(name, handler));
     return () => { stop(); observer.disconnect(); Object.entries(events).forEach(([name, handler]) => video.removeEventListener(name, handler)); };
   }, [running, available, list, settings, reducedMotion, source, videoRef, feed]);
