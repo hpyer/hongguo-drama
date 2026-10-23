@@ -30,7 +30,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   const menuRef = useRef(null);
   const menuButtonRef = useRef(null);
   const speedRef = useRef(null);
-  const episodeKeysRef = useRef(new Set());
+  const navigationKeysRef = useRef(new Set());
   const pointerRef = useRef(null);
   const expanded = fullscreen || windowFill;
 
@@ -61,7 +61,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     let pauseTimer;
     let dragging = false;
     const hide = () => {
-      if (available && !media.paused && !menuOpen && !danmakuOpen && !selectionPanel && !dragging && !controlsRef.current?.querySelector(':focus-visible')) setControlsHidden(true);
+      if (available && !media.paused && !menuOpen && !danmakuOpen && !selectionPanel && !dragging && !controlsRef.current?.querySelector(':focus-visible')) {
+        // Clear pointer focus so the next playback key cannot highlight a hidden button.
+        if (controlsRef.current?.contains(document.activeElement)) document.activeElement.blur();
+        setControlsHidden(true);
+      }
     };
     const scheduleHide = () => {
       clearTimeout(timer);
@@ -74,11 +78,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     const onKey = event => {
       const physicalKey = event.code || event.key;
       // Keep the release paired across source/effect changes, even if Shift is released first.
-      if (event.type === 'keyup' && episodeKeysRef.current.delete(physicalKey)) return;
+      if (event.type === 'keyup' && navigationKeysRef.current.delete(physicalKey)) return;
       if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
       const key = shortcutKey(event);
-      if (!menuOpen && !ignoresPlaybackShortcut(event.target) && key && [shortcuts.previous, shortcuts.next].includes(key)) {
-        if (event.type === 'keydown') episodeKeysRef.current.add(physicalKey);
+      if (!menuOpen && !ignoresPlaybackShortcut(event.target) && key && [shortcuts.previous, shortcuts.next, shortcuts.backward, shortcuts.forward].includes(key)) {
+        if (event.type === 'keydown') navigationKeysRef.current.add(physicalKey);
         return;
       }
       reveal();
@@ -106,7 +110,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     window.addEventListener('keyup', onKey, true);
     window.addEventListener('pointerup', stopDrag);
     window.addEventListener('pointercancel', stopDrag);
-    const onBlur = () => { episodeKeysRef.current.clear(); stopDrag(); onPointerLeave(); };
+    const onBlur = () => { navigationKeysRef.current.clear(); stopDrag(); onPointerLeave(); };
     window.addEventListener('blur', onBlur);
     // Source changes and automatic handoffs are not user activity.
     if (menuOpen || danmakuOpen || selectionPanel || (!continuing && !available)) reveal();

@@ -1,6 +1,6 @@
 # 红果短剧
 
-当前源码版本：2.6；功能与验证范围见 `docs/release-2.6.md`。
+当前源码版本：2.7；功能与验证范围见 `docs/release-2.7.md`。
 <!-- impeccable:product-schema 1 -->
 
 ## Platform

@@ -13,7 +13,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
 
 (async () => {
   const slots = [], effects = [], cleanups = [], listeners = new Map(), documentListeners = new Map(), stageListeners = new Map(), windowListeners = new Map(), timers = new Map();
-  let nextTimer = 0, keyboardFocus = false, now = 0;
+  let nextTimer = 0, keyboardFocus = false, now = 0, blurs = 0;
   const advance = (milliseconds = 2000) => {
     const until = now + milliseconds;
     for (;;) {
@@ -35,7 +35,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     play: async () => { plays++; media.paused = false; listeners.get('play')?.(); },
     pause: () => { pauses++; media.paused = true; listeners.get('pause')?.(); },
     addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const document = { fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
+  const document = { activeElement: null, fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
   const stage = { addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
   const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; } };
   props.onWindowFill = value => { props.windowFill = value; };
@@ -116,6 +116,38 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     const event = { type, key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, target: keyTarget, defaultPrevented: false, ...extra };
     windowListeners.get(type)?.(event); render();
   };
+  movePointer();
+  document.activeElement = find('退出全屏');
+  document.activeElement.blur = () => { blurs++; document.activeElement = null; };
+  advance(); render();
+  assert.equal(document.activeElement, null, 'auto-hide clears pointer focus left on fullscreen');
+  assert.equal(blurs, 1);
+  for (const portrait of [false, true]) {
+    props.portrait = portrait; props.windowFill = portrait; render();
+    for (const custom of [false, true]) {
+      props.shortcuts = { ...shortcutModule.exports.DEFAULT_SHORTCUTS, ...(custom ? { backward: 'shift+h', forward: 'shift+l' } : {}) }; render();
+      for (const key of custom ? ['h', 'l'] : ['ArrowLeft', 'ArrowRight']) {
+        for (const defaultPrevented of [false, true]) {
+          advance(); render(); assert.ok(hidden());
+          keyboard('keydown', key, { shiftKey: custom, defaultPrevented });
+          assert.ok(hidden(), `${key} seek keydown must preserve hidden controls`);
+          keyboard('keydown', key, { shiftKey: custom, defaultPrevented, repeat: true });
+          assert.ok(hidden(), `${key} held seek must preserve hidden controls`);
+          listeners.get('timeupdate')(); render();
+          movePointer(0); stageListeners.get('focusin')({ target: media }); render();
+          assert.ok(hidden(), 'seek timeupdate/stationary pointer/video focus must preserve hidden controls');
+          if (custom) keyboard('keyup', 'Shift');
+          keyboard('keyup', key, { shiftKey: false, defaultPrevented });
+          advance(3000); render();
+          assert.ok(hidden(), `${key} seek release must stay hidden after Shift release`);
+          movePointer(); assert.ok(!hidden(), 'real pointer movement reveals controls after seek');
+          keyboard('keydown', key, { shiftKey: custom }); keyboard('keyup', key, { shiftKey: custom });
+          assert.ok(!hidden(), 'seek preserves controls that were already visible');
+        }
+      }
+    }
+  }
+  props.portrait = false; props.windowFill = false; render(); advance(); render();
   for (const custom of [false, true]) {
     props.shortcuts = { ...shortcutModule.exports.DEFAULT_SHORTCUTS, ...(custom ? { previous: 'shift+j', next: 'shift+k' } : {}) }; render();
     for (const key of custom ? ['j', 'k'] : ['ArrowUp', 'ArrowDown']) {
