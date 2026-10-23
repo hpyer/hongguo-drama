@@ -7,6 +7,7 @@ import {
   advanceTimedDanmaku, lowerBoundTime, resolveDanmakuStatus,
 } from '../danmakuOfficial.mjs';
 import { DEFAULT_DANMAKU_SETTINGS } from '../danmakuModel.mjs';
+import * as sharedModel from '../danmakuModel.mjs';
 
 const SERIES = '7503745441910017049';
 const VID = '7503780574541122622';
@@ -74,6 +75,52 @@ test('弹幕只在时间到点时投放，不会提前出现', () => {
   assert.equal(state.items[0].text, '十秒');
 });
 
+test('全屏和半屏用相邻文字行排布，不把少数轨道拉成大空档', () => {
+  for (const area of ['half', 'full']) {
+    const state = makeFeed().animation;
+    const settings = { ...DEFAULT_DANMAKU_SETTINGS, area };
+    const list = Array.from({ length: 40 }, () => at(0, '短弹幕'));
+    playTo(state, list, 0, 4, options(settings, { width: 1987, height: 1248 }));
+    const rows = [...new Set(state.items.map(item => item.y))].sort((a, b) => a - b);
+    assert.ok(rows.length >= 10, `${area} 应能使用至少十行，实际 ${rows.length}`);
+    for (let i = 1; i < rows.length; i++) assert.ok(rows[i] - rows[i - 1] <= settings.fontSize * 2);
+    assert.ok(rows.at(-1) + settings.fontSize * 1.25 <= (area === 'half' ? 624 : 1248 - 76));
+  }
+});
+
+test('三个密度档都提高突发投放量，并保持递增', () => {
+  const counts = ['sparse', 'normal', 'dense'].map((density, i) => {
+    const state = makeFeed().animation;
+    const settings = { ...DEFAULT_DANMAKU_SETTINGS, density, area: 'full' };
+    playTo(state, Array.from({ length: 80 }, () => at(0, '长'.repeat(70))), 0, 4,
+      options(settings, { width: 1987, height: 1248 }));
+    assert.ok(state.nextId >= [5, 10, 20][i], `${density} 投放量不足：${state.nextId}`);
+    return state.nextId;
+  });
+  assert.ok(counts[0] < counts[1] && counts[1] < counts[2]);
+});
+
+test('进入和退出全屏保留在屏弹幕、时间光标与播放进度', () => {
+  assert.equal(typeof sharedModel.resizeDanmaku, 'function');
+  const state = makeFeed().animation;
+  const list = Array.from({ length: 8 }, (_, index) => at(index, `保留${index}`));
+  const small = options();
+  const full = options(DEFAULT_DANMAKU_SETTINGS, { width: 1987, height: 1248 });
+  playTo(state, list, 0, 5, small);
+  const ids = state.items.map(item => item.id);
+  const cursor = state.cursor;
+  const lastTime = state.lastTime;
+  for (const [before, after] of [[small, full], [full, small]]) {
+    sharedModel.resizeDanmaku(state, before, after);
+    assert.deepEqual(state.items.map(item => item.id), ids);
+    assert.equal(state.cursor, cursor);
+    assert.equal(state.lastTime, lastTime);
+    assert.ok(state.items.some(item => item.x < after.width && item.x + item.width > 0), '暂停切换也应立即有可见弹幕');
+    advanceTimedDanmaku(state, list, lastTime, 0, after);
+    assert.deepEqual(state.items.map(item => item.id), ids);
+  }
+});
+
 test('倒退跳转：重建光标并清掉属于旧位置的弹幕', () => {
   const state = makeFeed().animation;
   const list = [at(1, 'a'), at(2, 'b'), at(30, 'c')];
@@ -116,16 +163,17 @@ test('屏蔽词命中的弹幕被跳过，且不占用通道', () => {
 });
 
 test('同一道内允许续发：前一条走出足够距离后可以再发', () => {
-  const settings = { ...DEFAULT_DANMAKU_SETTINGS, density: 'sparse' }; // 只 1 条道
+  const settings = { ...DEFAULT_DANMAKU_SETTINGS, density: 'sparse' };
+  const runtime = options(settings, { height: 120 }); // 小容器只容纳一行。
   const state = makeFeed().animation;
   const list = [at(0, '第一条'), at(2, '第二条')];
-  advanceTimedDanmaku(state, list, 0, 0.016, options(settings));
+  advanceTimedDanmaku(state, list, 0, 0.016, runtime);
   assert.equal(state.items.length, 1);
   // 只推进 0.1 秒：第一条还占着道口，第二条必须等待
-  playTo(state, list, 0, 0.1, options(settings));
+  playTo(state, list, 0, 0.1, runtime);
   assert.equal(state.items.length, 1);
   // 推进到 3.5 秒：第二条已到点、第一条也走远，两条应同时在屏
-  playTo(state, list, 0.1, 3.5, options(settings));
+  playTo(state, list, 0.1, 3.5, runtime);
   assert.equal(state.items.length, 2);
   assert.deepEqual(state.items.map(item => item.text), ['第一条', '第二条']);
   assert.equal(state.cursor, 2, '两条都应被消费');
@@ -141,7 +189,7 @@ test('真实密度下不丢弹幕：0.5 条/秒的 100 条应全部投放', () =
 });
 
 test('突发弹幕不会互相追尾：同道内前后两条始终保持间距', () => {
-  const settings = { ...DEFAULT_DANMAKU_SETTINGS, density: 'normal' }; // 3 条道
+  const settings = { ...DEFAULT_DANMAKU_SETTINGS, density: 'normal' };
   const state = makeFeed().animation;
   const list = Array.from({ length: 40 }, (_, index) => at(10, `突发${index}`));
   const step = 1 / 60;
@@ -163,7 +211,7 @@ test('突发弹幕不会互相追尾：同道内前后两条始终保持间距',
     }
   }
   assert.ok(peak > 3, `通道应被复用，实际峰值只有 ${peak}`);
-  assert.ok(peak <= 12, `同屏弹幕不应无限增长，实际峰值 ${peak}`);
+  assert.ok(peak <= 20, `突发投放应受迟到窗口与间隔限制，实际峰值 ${peak}`);
   assert.ok(checked > 0, '应至少检查到一对同道弹幕');
 });
 

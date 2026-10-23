@@ -39,6 +39,28 @@ test('reduced motion keeps one stationary comment and replaces it after reading 
   assert.equal(state.items[0].x, 12);
 });
 
+test('缩小播放器保留可见弹幕并重排，不能压行或重播已消费内容', () => {
+  const settings = { ...DEFAULT_DANMAKU_SETTINGS, area: 'full', density: 'dense' };
+  const large = { width: 1987, height: 1248, settings, reducedMotion: false };
+  const small = { ...large, width: 500, height: 300 };
+  const state = { items: [], cursor: 0, nextId: 0, cooldown: 0 };
+  for (let i = 0; i < 70; i++) advanceDanmaku(state, Array(40).fill('长'.repeat(60)), 0.1, large);
+  const cursor = state.cursor;
+  assert.ok(state.items.length > 6);
+  assert.equal(model.resizeDanmaku(state, large, { ...small, width: 0 }), false);
+  model.resizeDanmaku(state, large, small);
+  assert.ok(state.items.length > 0);
+  assert.equal(state.cursor, cursor);
+  for (const item of state.items) {
+    assert.ok(item.y + settings.fontSize * 1.25 <= small.height - 76);
+    assert.ok(item.x < small.width && item.x + item.width > 0);
+  }
+  for (let i = 0; i < state.items.length; i++) for (let j = i + 1; j < state.items.length; j++) {
+    const a = state.items[i], b = state.items[j];
+    assert.ok(a.lane !== b.lane || a.x >= b.x + b.width + 24 || b.x >= a.x + a.width + 24);
+  }
+});
+
 
 test('consumed comments never loop and appended pages continue from current position', () => {
   const state = { items: [], cursor: 0, nextId: 0, cooldown: 0 };

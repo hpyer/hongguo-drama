@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_DANMAKU_SETTINGS, normalizeDanmakuSettings, createCommentFeed, appendCommentPage, commentIsBlocked, advanceDanmaku } from './danmakuModel.mjs';
+import { DEFAULT_DANMAKU_SETTINGS, normalizeDanmakuSettings, createCommentFeed, appendCommentPage, commentIsBlocked, advanceDanmaku, resizeDanmaku } from './danmakuModel.mjs';
 import './CommentDanmaku.css';
 
 const STORAGE_KEY = 'hongguo:comment-danmaku:v1';
@@ -128,8 +128,9 @@ export default function CommentDanmaku({ videoRef, source, available, danmaku })
       const nextWidth = layer.clientWidth;
       const nextHeight = layer.clientHeight;
       if (nextWidth === width && nextHeight === height) return;
+      if (!resizeDanmaku(state, options(), { ...options(), width: nextWidth, height: nextHeight })) return;
       width = nextWidth; height = nextHeight;
-      reset(); start();
+      setItems([...state.items]); paint(); start();
     };
     // Settings keep current trajectories and consumption; only new arrivals use the new lanes.
     start();

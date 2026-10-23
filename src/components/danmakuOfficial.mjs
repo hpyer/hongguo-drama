@@ -1,27 +1,8 @@
 // Adapted from dawei233/hongguo-drama, commit c884fab6c6e36ad38173e251738b9b35f958383f (GPL-3.0).
 // https://github.com/dawei233/hongguo-drama
-/**
- * 官方弹幕（带视频时间轴）的纯逻辑模型。
- *
- * ## 为什么单开一个文件
- *
- * `danmakuModel.mjs` 是上游的「本集评论滚动条」模型，它的单测用
- * `deepEqual` 锁死了设置对象的字段集合，夹具测试又断言了 `feed.animation`
- * 的内部结构。往里面加字段会同时打破两类测试，也会让以后
- * `git merge upstream/main` 每次都冲突。
- *
- * 所以这里**新增**而不是修改：评论滚动条那条路完全不动，官方弹幕这条路自成
- * 一套模型。两者共享的只有视觉设置（字号/透明度/速度/区域/密度/屏蔽词），
- * 由 `danmakuModel.mjs` 的 `normalizeDanmakuSettings` 提供。
- *
- * ## 与评论滚动条的本质区别
- *
- * 评论滚动条是"有一条发一条"的先进先出队列，与视频时间无关。
- * 弹幕必须**按视频时间投放**：`time` 到点了才出现，用户拖动进度条后要跟着
- * 重新对齐。这就是 `advanceTimedDanmaku` 存在的原因。
- */
+// 时间轴投放与评论队列分开；两种来源共用视觉设置、轨道布局和窗口重排。
 
-import { commentIsBlocked } from './danmakuModel.mjs';
+import { commentIsBlocked, danmakuLayout } from './danmakuModel.mjs';
 
 export const DANMAKU_SOURCES = Object.freeze(['official', 'comments']);
 
@@ -44,14 +25,8 @@ const LANE_HEAD_GAP = 24;
 // 单帧最多消费多少条待发弹幕，防止一次性涌入（例如长时间卡顿后恢复）把画面糊住。
 const MAX_EMIT_PER_FRAME = 4;
 
-// 两次投放之间的最小间隔（秒），按密度分档。
-//
-// 注意这个值**不能照抄**评论滚动条那套（那边是 3 / 1.8 / 0.9）。评论滚动条没有
-// 时间轴，靠这个间隔给队列定速；弹幕有时间轴，时间轴本身就在定速，间隔只用来
-// 防同刻堆叠。照抄那套 1.8 秒会把吞吐压到 0.55 条/秒，而实测一部剧的弹幕密度
-// 约 0.5 条/秒且带突发，结果就是突发段落整批变成"迟到"而被丢弃。
-// 通道数（稀疏 1 / 适中 3 / 密集 6）才是密度的主要控制手段。
-const EMIT_INTERVAL = Object.freeze({ sparse: 1.5, normal: 0.6, dense: 0.25 });
+// 时间轴控制出场时机；密度控制突发时的最小间隔，不限制为固定几行。
+const EMIT_INTERVAL = Object.freeze({ sparse: 0.75, normal: 0.3, dense: 0.1 });
 
 /** 严重迟到的弹幕直接丢弃：它们在时间轴上已经过去了，补发只会突兀。 */
 const STALE_SECONDS = 5;
@@ -151,7 +126,7 @@ export function appendOfficialPage(feed, data) {
  * @returns {boolean} 是否需要重绘
  */
 export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, options) {
-  const { width, height, settings, reducedMotion, bottomInset = 76 } = options;
+  const { width, height, settings, reducedMotion } = options;
   if (!(width >= 40) || !(height >= 60)) return false;
   const list = Array.isArray(danmaku) ? danmaku : [];
   const delta = Math.min(Math.max(elapsed, 0), 0.25);
@@ -177,13 +152,7 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
   if (state.items.length !== before) changed = true;
   state.cooldown = Math.max(0, state.cooldown - delta);
 
-  const lineHeight = settings.fontSize + 12;
-  const top = 12;
-  const bottom = Math.min(height - bottomInset, height * ({ quarter: 0.25, half: 0.5, full: 1 }[settings.area] ?? 0.5));
-  const lanes = reducedMotion
-    ? 1
-    : Math.max(1, Math.min({ sparse: 1, normal: 3, dense: 6 }[settings.density] ?? 3, Math.floor((bottom - top) / lineHeight)));
-  const laneGap = lanes > 1 ? Math.max(lineHeight, (bottom - top - lineHeight) / (lanes - 1)) : 0;
+  const { top, lineHeight, lanes } = danmakuLayout(options);
 
   const laneFree = index => {
     const occupants = state.items.filter(item => item.lane === index);
@@ -208,7 +177,8 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
     }
     if (state.cooldown > 0) break;
 
-    const lane = Array.from({ length: lanes }, (_, index) => index).find(laneFree);
+    const candidates = Array.from({ length: lanes }, (_, index) => index);
+    const lane = candidates.find(index => !state.items.some(item => item.lane === index)) ?? candidates.find(laneFree);
     if (lane === undefined) break; // 保留 cursor，下一帧再试
 
     const chars = Array.from(entry.text);
@@ -222,7 +192,7 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
       mode: entry.mode,
       lane,
       x: reducedMotion ? 12 : width,
-      y: top + lane * laneGap,
+      y: top + lane * lineHeight,
       width: textWidth,
       age: 0,
     });

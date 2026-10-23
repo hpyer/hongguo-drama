@@ -1,7 +1,7 @@
 // Adapted from dawei233/hongguo-drama, commit c884fab6c6e36ad38173e251738b9b35f958383f (GPL-3.0).
 // https://github.com/dawei233/hongguo-drama
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { commentIsBlocked } from './danmakuModel.mjs';
+import { commentIsBlocked, resizeDanmaku } from './danmakuModel.mjs';
 import { createOfficialFeed, appendOfficialPage, advanceTimedDanmaku, resolveDanmakuStatus } from './danmakuOfficial.mjs';
 import './CommentDanmaku.css';
 
@@ -166,8 +166,9 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
       const nextWidth = layer.clientWidth;
       const nextHeight = layer.clientHeight;
       if (nextWidth === width && nextHeight === height) return;
+      if (!resizeDanmaku(state, options(), { ...options(), width: nextWidth, height: nextHeight })) return;
       width = nextWidth; height = nextHeight;
-      seek(); start();
+      setItems([...state.items]); paint(); start();
     };
     start();
     const observer = new ResizeObserver(resize);
