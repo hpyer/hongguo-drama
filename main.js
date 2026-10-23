@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 2.8 下载器（独立版）主进程
+ * main.js - 红果短剧 2.9 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -13,7 +13,9 @@ const path = require('path');
 const IS_PREVIEW = require('./package.json').name === 'hongguo-experience-preview';
 if (IS_PREVIEW) {
   app.setName('红果短剧预览');
-  app.setPath('userData', path.join(app.getPath('appData'), 'hongguo-experience-preview'));
+  if (!app.commandLine.hasSwitch('user-data-dir')) {
+    app.setPath('userData', path.join(app.getPath('appData'), 'hongguo-experience-preview'));
+  }
 }
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -35,6 +37,7 @@ const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
 const { fetchPublicDetails } = require('./src/native/public-details');
 const { fetchEpisodeComments } = require('./src/native/episode-comments');
+const { fetchDanmaku } = require('./src/native/danmaku');
 const mediaAccess = require('./src/native/media-access').createMediaAccess(process.env.VITE_DEV_SERVER_URL);
 const rendererSecurity = require('./src/native/renderer-security').createRendererSecurity(
   path.join(__dirname, 'dist-react', 'index.html'), process.env.VITE_DEV_SERVER_URL);
@@ -3796,6 +3799,12 @@ ipcMain.handle('get-public-details', async (event, seriesId, vid) => {
 ipcMain.handle('get-episode-comments', async (event, options) => {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return { success: false, error: 'Window unavailable' };
   return fetchEpisodeComments(options);
+});
+
+ipcMain.handle('get-episode-danmaku', async (_event, options) => {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return fetchDanmaku(null);
+  const { seriesId, vid, fresh, limit } = options;
+  return fetchDanmaku({ seriesId, vid, fresh, limit });
 });
 
 ipcMain.handle('get-app-info', async () => ({

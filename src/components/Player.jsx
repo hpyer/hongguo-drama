@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import useDialogKeyboard from './useDialogKeyboard';
 import PlayerControls from './PlayerControls';
 import CommentDanmaku, { useCommentDanmaku } from './CommentDanmaku';
+import OfficialDanmaku, { useOfficialDanmaku } from './OfficialDanmaku';
+import { useDanmakuSource, writeDanmakuSource } from './danmakuSource.mjs';
 import { SHORTCUT_ACTIONS, formatShortcut, ignoresPlaybackShortcut, readShortcuts, shortcutKey, subscribeShortcuts } from '../shortcuts';
 import CommunityPanel from './CommunityPanel';
 import VideoEnhancement, { useVideoEnhancement } from './VideoEnhancement';
@@ -517,7 +519,11 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   // 原生全屏依附于 video 节点。准备下一集时保留结束帧，换源不换节点。
   if (canPlay) lastVideoSrcRef.current = playableSource;
   const videoSrc = compatProgress ? '' : lastVideoSrcRef.current;
-  const danmaku = useCommentDanmaku({ seriesId: activeSeriesId, episodeId: current?.vid, active: active && canPlay && showDanmakuControls, source: videoSrc });
+  const danmakuSource = useDanmakuSource();
+  const danmakuActive = active && canPlay && showDanmakuControls;
+  const commentDanmaku = useCommentDanmaku({ seriesId: activeSeriesId, episodeId: current?.vid, active: danmakuActive && danmakuSource === 'comments' });
+  const officialDanmaku = useOfficialDanmaku({ seriesId: activeSeriesId, vid: current?.vid, active: danmakuActive && danmakuSource === 'official', preferences: commentDanmaku });
+  const danmaku = { ...(danmakuSource === 'official' ? officialDanmaku : commentDanmaku), sourceKind: danmakuSource, setSource: writeDanmakuSource };
 
   useEffect(() => {
     const v = videoRef.current;
@@ -1526,7 +1532,9 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
             }}
           />
         <VideoEnhancement videoRef={videoRef} source={videoSrc} available={canPlay && active} enhancement={enhancement} />
-        <CommentDanmaku videoRef={videoRef} source={videoSrc} available={canPlay && active} danmaku={danmaku} />
+        {danmakuSource === 'official'
+          ? <OfficialDanmaku videoRef={videoRef} source={videoSrc} available={canPlay && active} danmaku={danmaku} />
+          : <CommentDanmaku videoRef={videoRef} source={videoSrc} available={canPlay && active} danmaku={danmaku} />}
         <PlayerControls danmaku={showDanmakuControls ? danmaku : null} enhancement={enhancement} continuing={autoAdvancing && !playbackError && !decodeFailed} autoContinue={autoNext && !!findNext(currentIndex)} shortcuts={shortcuts} onToggleFullscreen={toggleFullscreen} portrait={portrait} windowFill={windowFill} onWindowFill={setWindowFill} videoRef={videoRef} stageRef={stageRef} source={videoSrc} available={canPlay}
           seriesTitle={detail?.series_title} episodes={episodes} currentIndex={currentIndex} onEpisodeChange={goToEpisode}
           onlineQuality={onlineQuality} supportsOnlineQuality={supportsOnlineQuality} onQualityChange={changeOnlineQuality}

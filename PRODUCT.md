@@ -1,6 +1,6 @@
 # 红果短剧
 
-当前源码版本：2.8；功能与验证范围见 `docs/release-2.8.md`。
+当前源码目标：2.9（本机预览，未公证、未发布）；新增时间轴弹幕与来源署名见 `docs/release-2.9.md`。当前正式版为2.8。
 <!-- impeccable:product-schema 1 -->
 
 ## Platform
