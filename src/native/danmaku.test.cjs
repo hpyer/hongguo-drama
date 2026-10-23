@@ -11,6 +11,9 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 let danmaku;
 try { danmaku = require('./danmaku.js'); } catch (error) {
@@ -46,8 +49,46 @@ const fixedOptions = transport => ({
 });
 
 test.beforeEach(() => {
+  danmaku.setDeviceIdentityFile?.(null);
   danmaku.resetDanmakuCache();
   danmaku.setDeviceIdentity({ deviceId: '1000000000000000001', installId: '1000000000000000002' });
+});
+
+test('重启后复用本机匿名标识，避免上游重新分配少量弹幕子集', async () => {
+  assert.equal(typeof danmaku.setDeviceIdentityFile, 'function');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'danmaku-client-'));
+  const file = path.join(folder, 'client.json');
+  const requests = [];
+  const transport = async url => {
+    const query = new URL(url).searchParams;
+    requests.push([query.get('device_id'), query.get('iid')]);
+    return { data: JSON.stringify(page({ rows: [comment()] })) };
+  };
+  try {
+    for (let restart = 0; restart < 2; restart++) {
+      danmaku.resetDanmakuCache();
+      danmaku.setDeviceIdentityFile(file);
+      assert.equal((await danmaku.fetchDanmaku({ seriesId: SERIES, vid: VID, ...fixedOptions(transport) })).success, true);
+    }
+    assert.ok(requests[0].every((value, i) => value === requests[1][i]), '重启不能更换匿名标识');
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally { danmaku.setDeviceIdentityFile(null); fs.rmSync(folder, { recursive: true, force: true }); }
+});
+
+test('本机标识损坏时保留文件并报告配置问题，不静默重新生成', async () => {
+  assert.equal(typeof danmaku.setDeviceIdentityFile, 'function');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'danmaku-client-'));
+  const file = path.join(folder, 'client.json');
+  fs.writeFileSync(file, '{broken', { mode: 0o600 });
+  let calls = 0;
+  try {
+    danmaku.setDeviceIdentityFile(file);
+    const result = await danmaku.fetchDanmaku({ seriesId: SERIES, vid: VID, ...fixedOptions(async () => { calls++; }) });
+    assert.equal(result.success, false);
+    assert.match(result.error, /本机配置/);
+    assert.equal(calls, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+  } finally { danmaku.setDeviceIdentityFile(null); fs.rmSync(folder, { recursive: true, force: true }); }
 });
 
 test('非红果编号直接拒绝，且不打网络', async () => {

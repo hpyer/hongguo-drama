@@ -86,6 +86,7 @@ export function useOfficialDanmaku({ seriesId, vid, active, preferences }) {
 
   return {
     sourceKind: 'official',
+    active,
     enabled,
     supported,
     running,
@@ -111,10 +112,11 @@ export function useOfficialDanmaku({ seriesId, vid, active, preferences }) {
 
 export default function OfficialDanmaku({ videoRef, source, available, danmaku }) {
   const layerRef = useRef(null);
+  const layoutRef = useRef(null);
   const nodes = useRef(new Map());
   const [items, setItems] = useState([]);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const { running, settings, feed, status, error, loading } = danmaku;
+  const { running, enabled, active, supported, settings, feed, status, error, loading } = danmaku;
   const list = feed.danmaku;
 
   useEffect(() => {
@@ -128,7 +130,7 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
     feed.animation.lastTime = undefined;
     feed.animation.items = [];
     setItems([]);
-  }, [source, feed, running, settings.fontSize, settings.area, settings.density, reducedMotion]);
+  }, [source, feed, enabled, active, supported, available, settings.fontSize, settings.area, settings.density, reducedMotion]);
 
   // 布局改变时重对齐；透明度、速度与屏蔽词调整保留当前轨迹。
   useEffect(() => {
@@ -139,9 +141,9 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
     const video = videoRef.current;
     if (!running || !available || !layer || !video) return undefined;
     let frame = 0;
-    let previous = 0;
-    let width = layer.clientWidth;
-    let height = layer.clientHeight;
+    // Retain geometry across suspended animation effects and layer remounts.
+    let { width, height } = layoutRef.current || { width: layer.clientWidth, height: layer.clientHeight };
+    layoutRef.current = { width, height };
     const controls = layer.parentElement?.querySelector('.player-controls-bar');
     const options = () => ({ width, height, settings, reducedMotion, bottomInset: Math.max(76, (controls?.clientHeight || 0) + 8) });
     const paint = () => state.items.forEach(item => {
@@ -149,17 +151,17 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
       if (node) node.style.transform = `translate(${item.x}px, ${item.y}px)`;
     });
     const canAdvance = () => !video.paused && !video.ended && !video.seeking && video.readyState >= 2 && !document.hidden;
-    const tick = now => {
+    const tick = () => {
       frame = 0;
-      if (!canAdvance()) { previous = 0; return; }
-      const delta = previous ? Math.min((now - previous) / 1000, 0.1) * video.playbackRate : 0.001;
-      previous = now;
+      if (!canAdvance()) return;
+      // Fullscreen can suspend frames while media advances; only seeking events reset the timeline.
+      const delta = state.lastTime === undefined ? 0 : Math.max(0, video.currentTime - state.lastTime);
       if (advanceTimedDanmaku(state, list, video.currentTime, delta, options())) setItems([...state.items]);
       paint();
       frame = requestAnimationFrame(tick);
     };
-    const start = () => { if (!frame && canAdvance()) { previous = 0; frame = requestAnimationFrame(tick); } };
-    const stop = () => { cancelAnimationFrame(frame); frame = 0; previous = 0; };
+    const start = () => { if (!frame && canAdvance()) frame = requestAnimationFrame(tick); };
+    const stop = () => { cancelAnimationFrame(frame); frame = 0; };
     // 让下一帧重新对齐：跳转后必须重建光标，否则会把中间整段弹幕一次性倒出来
     const seek = () => { stop(); state.lastTime = undefined; state.items = []; setItems([]); };
     const resize = () => {
@@ -168,8 +170,10 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
       if (nextWidth === width && nextHeight === height) return;
       if (!resizeDanmaku(state, options(), { ...options(), width: nextWidth, height: nextHeight })) return;
       width = nextWidth; height = nextHeight;
+      layoutRef.current = { width, height };
       setItems([...state.items]); paint(); start();
     };
+    resize();
     start();
     const observer = new ResizeObserver(resize);
     observer.observe(layer);
@@ -178,7 +182,7 @@ export default function OfficialDanmaku({ videoRef, source, available, danmaku }
     return () => { stop(); observer.disconnect(); Object.entries(events).forEach(([name, handler]) => video.removeEventListener(name, handler)); };
   }, [running, available, list, settings, reducedMotion, source, videoRef, feed]);
 
-  if (!running || !available) return null;
+  if (!enabled || !active || !supported || !available) return null;
   return <div ref={layerRef} className={`comment-danmaku ${reducedMotion ? 'comment-danmaku-static' : ''}`}>
     <div aria-hidden="true" style={{ opacity: settings.opacity / 100, fontSize: settings.fontSize }}>
       {((list.length ? items : [])).map(item => <span className="comment-danmaku-item" key={item.id} ref={node => { if (node) nodes.current.set(item.id, node); else nodes.current.delete(item.id); }}

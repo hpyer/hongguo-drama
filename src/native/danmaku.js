@@ -31,6 +31,7 @@
  */
 
 const axios = require('axios');
+const fs = require('node:fs');
 const sign = require('./danmaku-sign');
 
 const BASE_URL = 'https://api5-normal-sinfonlineb.fqnovel.com';
@@ -60,10 +61,37 @@ const CACHE_MAX = 64;
 const cache = new Map();
 const pending = new Map();
 
-// 进程内固定一份设备指纹，与官方客户端"安装一次生成一次"的行为一致。
+// 上游按匿名标识分配弹幕子集，跨重启必须复用同一份本机标识。
 let identity = null;
+let identityFile = null;
+function setDeviceIdentityFile(file) {
+  identityFile = file;
+  identity = null;
+}
 const deviceIdentity = () => {
-  if (!identity) identity = { deviceId: sign.newDeviceId(), installId: sign.newDeviceId() };
+  if (identity) return identity;
+  const create = () => ({ deviceId: sign.newDeviceId(), installId: sign.newDeviceId() });
+  if (!identityFile) return (identity = create());
+  try {
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(identityFile, 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      saved = create();
+      try { fs.writeFileSync(identityFile, JSON.stringify(saved), { flag: 'wx', mode: 0o600 }); }
+      catch (writeError) {
+        if (writeError.code !== 'EEXIST') throw writeError;
+        saved = JSON.parse(fs.readFileSync(identityFile, 'utf8'));
+      }
+    }
+    if (typeof saved?.deviceId !== 'string' || typeof saved?.installId !== 'string' ||
+        !/^\d{19}$/.test(saved.deviceId) || !/^\d{19}$/.test(saved.installId)) throw new Error('Invalid local client');
+    identity = { deviceId: saved.deviceId, installId: saved.installId };
+  } catch {
+    const error = new Error('Danmaku local configuration unavailable');
+    error.code = 'DANMAKU_IDENTITY_IO';
+    throw error;
+  }
   return identity;
 };
 
@@ -410,7 +438,9 @@ async function fetchDanmaku(options = {}) {
           // 错误说明要能让用户自己判断：发生了什么、已经试过什么、还能做什么。
           // 首页失败说明源不可用；后续页失败则保留已拿到的部分，不把整集判死。
           // 不透传异常文本：Axios 错误可能携带签名 URL 或设备指纹。
-          failure = collected.length
+          failure = error?.code === 'DANMAKU_IDENTITY_IO'
+            ? '弹幕本机配置读取或保存失败，请检查资料目录权限后重试'
+            : collected.length
             ? '后续弹幕加载中断，已保留已获取的部分'
             : error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError' || error?.code === 'ERR_CANCELED'
               ? '弹幕接口响应超时（已用官方签名请求），可稍后再试'
@@ -501,6 +531,7 @@ module.exports = {
   requestWindow,
   resetDanmakuCache,
   setDeviceIdentity,
+  setDeviceIdentityFile,
   BASE_URL,
   COMMENT_PATH,
   USER_AGENT,

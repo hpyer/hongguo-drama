@@ -37,7 +37,7 @@ const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
 const { fetchPublicDetails } = require('./src/native/public-details');
 const { fetchEpisodeComments } = require('./src/native/episode-comments');
-const { fetchDanmaku } = require('./src/native/danmaku');
+const { fetchDanmaku, setDeviceIdentityFile } = require('./src/native/danmaku');
 const mediaAccess = require('./src/native/media-access').createMediaAccess(process.env.VITE_DEV_SERVER_URL);
 const rendererSecurity = require('./src/native/renderer-security').createRendererSecurity(
   path.join(__dirname, 'dist-react', 'index.html'), process.env.VITE_DEV_SERVER_URL);
@@ -3948,6 +3948,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   try {
     const dataFile = path.join(app.getPath('userData'), 'data.json');
     store.init(dataFile);
+    setDeviceIdentityFile(path.join(app.getPath('userData'), 'danmaku-client.json'));
     loadDownloadTasks();
     loadSeriesRegistry();
     try { rebuildSeriesRegistryFromTasks(); } catch (_) { /* storage-error reports the failed write when the window opens. */ }

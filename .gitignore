@@ -53,6 +53,7 @@ settings.json
 *.sqlite*
 *.session*
 data.json
+danmaku-client.json
 downloads/
 logs/
 outputs/
