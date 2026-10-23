@@ -6,7 +6,15 @@ const vm = require('node:vm');
 const { transformSync } = require('esbuild');
 const root = path.join(__dirname, '../src/components');
 const player = fs.readFileSync(path.join(root, 'Player.jsx'), 'utf8');
-const wiring = player.slice(player.indexOf('  const danmakuSource ='), player.indexOf('\n\n  useEffect', player.indexOf('  const danmakuSource =')));
+function extractWiring(source) {
+  const normalized = source.replace(/\r\n/g, '\n');
+  const start = normalized.indexOf('  const danmakuSource =');
+  const end = normalized.indexOf('\n\n  useEffect', start);
+  assert(start >= 0 && end > start, 'Player danmaku hook boundaries must be present');
+  return normalized.slice(start, end);
+}
+const wiring = extractWiring(player);
+assert.equal(extractWiring(player.replace(/\r?\n/g, '\r\n')), wiring, 'Windows CRLF must select the same hook code');
 
 function mount({ response, enabled = true } = {}) {
   const slots = [], effects = [], cleanups = [], requests = [], intervals = new Map();

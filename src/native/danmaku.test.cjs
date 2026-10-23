@@ -54,11 +54,13 @@ test.beforeEach(() => {
   danmaku.setDeviceIdentity({ deviceId: '1000000000000000001', installId: '1000000000000000002' });
 });
 
-test('重启后复用本机匿名标识，避免上游重新分配少量弹幕子集', async () => {
+test('重启后复用本机匿名标识，避免上游重新分配少量弹幕子集', async t => {
   assert.equal(typeof danmaku.setDeviceIdentityFile, 'function');
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'danmaku-client-'));
   const file = path.join(folder, 'client.json');
   const requests = [];
+  const logs = [];
+  for (const method of ['log', 'info', 'warn', 'error']) t.mock.method(console, method, (...args) => logs.push(args.map(String).join(' ')));
   const transport = async url => {
     const query = new URL(url).searchParams;
     requests.push([query.get('device_id'), query.get('iid')]);
@@ -71,7 +73,10 @@ test('重启后复用本机匿名标识，避免上游重新分配少量弹幕�
       assert.equal((await danmaku.fetchDanmaku({ seriesId: SERIES, vid: VID, ...fixedOptions(transport) })).success, true);
     }
     assert.ok(requests[0].every((value, i) => value === requests[1][i]), '重启不能更换匿名标识');
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.ok(fs.statSync(file).isFile());
+    assert.ok(logs.every(line => requests[0].every(value => !line.includes(value))), '日志不得包含本机匿名标识');
+    // Windows does not expose POSIX permission bits through stat/chmod.
+    if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   } finally { danmaku.setDeviceIdentityFile(null); fs.rmSync(folder, { recursive: true, force: true }); }
 });
 
