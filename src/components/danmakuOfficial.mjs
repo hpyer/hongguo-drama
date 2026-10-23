@@ -137,6 +137,16 @@ export function advanceTimedDanmaku(state, danmaku, currentTime, elapsed, option
     // Reposition future comments without erasing comments already crossing the screen.
     state.cursor = lowerBoundTime(list, currentTime);
     state.cooldown = 0;
+    // A resumed or re-enabled sparse feed has no retired comments from this session.
+    if (!reducedMotion && !state.items.length && !state.replayQueue?.length) {
+      state.replayQueue = [];
+      for (let index = state.cursor - 1; index >= 0 && state.replayQueue.length < 6; index--) {
+        const entry = list[index];
+        if (!commentIsBlocked(entry.text, settings) && !state.replayQueue.some(item => item.content === entry.text)) {
+          state.replayQueue.push({ entry, content: entry.text });
+        }
+      }
+    }
   }
   if (emitting) state.lastTime = currentTime;
 
