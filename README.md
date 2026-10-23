@@ -23,7 +23,7 @@
 
 ## 下载与安装
 
-**本轮源码／发行目标：2.9**。以下为 2.9 下载入口，公开状态与资产可用性以发行页为准；尚未公开时可从“查看最新正式版”下载上一正式版。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前正式版：2.9**。以下为 2.9 下载入口，资产与校验文件以本版发行页为准。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
 
 | 设备 | 下载 2.9 | 安装方式 |
 |---|---|---|
@@ -394,7 +394,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前源码／发行目标为 **2.9**，变更见 [2.9 说明](docs/release-2.9.md)。安装包、对应源码、签名公证和实际发布状态见 [2.9 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v2.9)；尚未公开时以 [最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) 为准。
+当前正式版为 **2.9**，变更见 [2.9 说明](docs/release-2.9.md)。安装包、对应源码、签名公证和实际发布状态见 [2.9 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v2.9)。
 
 源码版本修改不代表构建、安装、签名、公证或发布完成；本版检查范围和结果以发行页为准。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替 2.9 验收，也不代表实体电脑完整覆盖。
 
