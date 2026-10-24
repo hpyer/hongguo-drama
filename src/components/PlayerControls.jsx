@@ -77,7 +77,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
       }
     };
     const reveal = () => { clearTimeout(pauseTimer); idleDeadlineRef.current = Date.now() + 1000; setControlsHidden(false); scheduleHide(); };
-    const onPointerLeave = () => { clearTimeout(timer); hide(); };
+    const onPointerLeave = () => { pointerRef.current = null; clearTimeout(timer); hide(); };
     const onKey = event => {
       const physicalKey = event.code || event.key;
       // Keep the release paired across source/effect changes, even if Shift is released first.
