@@ -88,10 +88,14 @@ export default function App() {
       case 'calendar':
         return <ReleaseCalendar onPlay={async ({ seriesId }) => {
           try {
-            const result = await window.electronAPI.searchResolve(seriesId);
-            if (!result?.success) throw new Error(result?.error || '加载剧集失败，请重试');
-            setPlayerTarget({ seriesId, ts: Date.now() });
-            navigate('player');
+            const payload = { seriesId, resume: true };
+            let result = await window.electronAPI.playSeries(payload);
+            if (!result?.success && result?.error === '未找到短剧档案，请重新打开详情') {
+              const resolved = await window.electronAPI.searchResolve(seriesId);
+              if (!resolved?.success) throw new Error(resolved?.error || '加载剧集失败，请重试');
+              result = await window.electronAPI.playSeries(payload);
+            }
+            if (!result?.success) throw new Error(result?.error || '打开播放失败，请重试');
           } catch (error) { setStorageError(error.message); }
         }} />;
       case 'history':

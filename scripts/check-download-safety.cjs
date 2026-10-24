@@ -9,7 +9,7 @@ const { createRequire } = require('node:module');
 const source = path.resolve(__dirname, '../main.js'), req = createRequire(source);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-safety-'));
 let serial = 0, failures = 0;
-function load(settings = {}, overrides = {}) {
+function load(settings = {}, overrides = {}, env = process.env) {
   const dir = path.join(root, String(++serial)); fs.mkdirSync(dir);
   const handlers = {}, app = new EventEmitter(), opened = [], proxyCalls = [];
   let stored = { root: dir, ...settings };
@@ -20,7 +20,7 @@ function load(settings = {}, overrides = {}) {
     session: { defaultSession: { setProxy: async options => { proxyCalls.push(options); } } },
   };
   const store = { getSettings: () => ({ ...stored }), saveTasks() {}, saveSeries() {}, saveSettings(next) { stored = { ...next }; } };
-  const context = vm.createContext({ require: name => overrides[name] || (name === 'electron' ? electron : name === './src/store' ? store : req(name)), __dirname: path.dirname(source), process: { ...process, env: { ...process.env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
+  const context = vm.createContext({ require: name => overrides[name] || (name === 'electron' ? electron : name === './src/store' ? store : req(name)), __dirname: path.dirname(source), process: { ...process, env: { ...env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   const pump = context.pumpQueue;
@@ -87,6 +87,30 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     assert.equal(result.success, true); assert.equal(fs.existsSync(completed.savePath), false);
     assert.equal(h.run('downloadTasks.some(task => task.id === "two")'), true, 'active task disappeared');
     assert.equal(h.run('downloadQueue.some(task => task.id === "three")'), true, 'waiting task disappeared');
+  });
+  await check('delete all finds merged files after record cleanup and preserves unknown directories', async () => {
+    for (const legacy of [false, true]) {
+      const h = load(); h.set('seriesRegistry', series());
+      const dir = legacy ? path.join(h.dir, '红果短剧', 'Short') : h.context.seriesDownloadDir(h.dir, 'S', 'Short');
+      fs.mkdirSync(dir, { recursive: true });
+      const one = task('one', dir, 'completed', 'Short 001.mp4'); file(one.savePath);
+      const merged = path.join(dir, 'Short 合集.mp4'); file(merged);
+      const unknownDir = path.join(h.dir, 'unknown'); fs.mkdirSync(unknownDir);
+      const unrelated = path.join(unknownDir, 'Other 合集.mp4'); file(unrelated);
+      h.set('downloadTasks', [one]);
+      assert.equal((await h.handlers['delete-tasks']({}, ['one'], { deleteFiles: false })).success, true);
+      assert.equal(h.run('downloadTasks.length'), 0);
+      assert.ok(fs.existsSync(one.savePath) && fs.existsSync(merged));
+      const result = await h.handlers['delete-all-downloaded']({});
+      assert.equal(result.success, true);
+      assert.equal(fs.existsSync(merged), false, 'merged file remains after record cleanup');
+      assert.equal(fs.existsSync(one.savePath), false);
+      assert.equal(result.count, 2); assert.equal(result.freed, 240000);
+      assert.equal(fs.existsSync(unrelated), true, 'unknown directory must not be scanned');
+      assert.equal(h.run('seriesRegistry.length'), 1);
+      const empty = await h.handlers['delete-all-downloaded']({});
+      assert.equal(empty.success, true); assert.equal(empty.count, 0);
+    }
   });
   await check('auto-delete uses task identity with title suffixes', async () => {
     const h = load(); const one = task('one', h.dir, 'completed', 'Short 001 Reunion.mp4');
@@ -303,6 +327,29 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
       if (previous === undefined) delete process.env.HTTPS_PROXY;
       else process.env.HTTPS_PROXY = previous;
     }
+  });
+  for (const key of ['ALL_PROXY', 'all_proxy']) await check(`${key} follows direct, custom and system proxy mode changes`, async () => {
+    const startup = 'http://127.0.0.1:19191';
+    const h = load({}, {}, { [key]: startup });
+    // Execute axios's real environment resolver against the isolated app environment.
+    const proxyModule = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(req.resolve('proxy-from-env'), 'utf8'), { require: req, module: proxyModule, exports: proxyModule.exports, process: h.context.process, URL });
+    const route = () => proxyModule.exports.getProxyForUrl('https://media.example.test/episode.mp4');
+    assert.equal(route(), startup);
+    await h.context.applyProxySettings({ proxy_enabled: false });
+    assert.equal(route(), '', 'disabled proxy must bypass inherited ALL_PROXY');
+    assert.equal(h.context.process.env[key], undefined);
+    await h.context.applyProxySettings({ proxy_enabled: true, proxy_mode: 'system' });
+    assert.equal(route(), startup);
+    assert.equal(h.context.resolveProxyConfig({ proxy_enabled: true, proxy_mode: 'system' }).url, startup);
+    await h.context.applyProxySettings({ proxy_enabled: true, proxy_mode: 'custom', proxy_host: '127.0.0.1', proxy_port: 19192 });
+    assert.equal(route(), 'http://127.0.0.1:19192');
+    assert.equal(h.context.process.env[key], 'http://127.0.0.1:19192');
+    await h.context.applyProxySettings({ proxy_enabled: true, proxy_mode: 'direct' });
+    assert.equal(route(), '');
+    await h.context.applyProxySettings({ proxy_enabled: true, proxy_mode: 'system' });
+    assert.equal(route(), startup);
+    assert.deepEqual({ ...h.context.process.env }, { [key]: startup });
   });
   await check('proxy connectivity test keeps a saved password when the draft leaves it blank', async () => {
     let seen;

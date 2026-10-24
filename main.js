@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 2.9 下载器（独立版）主进程
+ * main.js - 红果短剧 3.0 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -221,14 +221,15 @@ function getDefaultSettings() {
 
 // 启动时记下系统/终端原来的代理。之后 direct/custom 会改写这些变量，
 // 「跟随系统」必须读这份快照，否则会把上一次的直连或手动代理当成系统代理。
-const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'];
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
 const originalProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.map((key) => [key, process.env[key]]));
 let activeProxyAuth = null;
 const sessionProxyConfigs = new WeakMap();
 
 function snapshotProxyUrl() {
   return originalProxyEnv.HTTPS_PROXY || originalProxyEnv.https_proxy
-    || originalProxyEnv.HTTP_PROXY || originalProxyEnv.http_proxy || null;
+    || originalProxyEnv.HTTP_PROXY || originalProxyEnv.http_proxy
+    || originalProxyEnv.all_proxy || originalProxyEnv.ALL_PROXY || null;
 }
 
 function normalizeProxySettings(settings) {
@@ -3621,7 +3622,8 @@ ipcMain.handle('delete-all-downloaded', async () => {
         } catch (_) { failed++; }
       }
       try {
-        const c = collectSeriesEpisodeFiles(sid, '');
+        const entry = seriesRegistry.find(s => String(s.series_id) === String(sid));
+        const c = collectSeriesEpisodeFiles(sid, entry?.series_title || '');
         if (c.dir && fs.existsSync(c.dir)) {
           for (const f of fs.readdirSync(c.dir)) {
             if (f.endsWith('.mp4') && f.includes('合集')) {
