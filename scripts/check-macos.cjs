@@ -40,11 +40,12 @@ function load(platform = 'darwin') {
     constructor(options) {
       super(); this.options = options; this.destroyed = false;
       this.webContents = new EventEmitter();
-      Object.assign(this.webContents, { setWindowOpenHandler() {}, send() {} });
+      Object.assign(this.webContents, { setWindowOpenHandler() {}, send() {}, setZoomFactor: value => { this.zoomFactor = value; } });
       windows.push(this);
     }
     static getAllWindows() { return windows.filter(w => !w.destroyed); }
     isDestroyed() { return this.destroyed; }
+    getContentSize() { return [this.options.width, this.options.height]; }
     isMinimized() { return false; }
     setMenuBarVisibility() {}
     loadFile() { return Promise.resolve(); }
@@ -110,6 +111,7 @@ function load(platform = 'darwin') {
     const h = load();
     await h.ready();
     const main = h.windows[0];
+    assert.equal(main.zoomFactor, 1100 / 1200);
     h.context.getSearchWindow();
     main.close();
     h.app.emit('activate');
@@ -117,6 +119,7 @@ function load(platform = 'darwin') {
     h.app.emit('activate');
     assert.equal(h.windows.length, 3, 'existing main window must be reused');
     assert.ok(h.windows[2].focused);
+    assert.equal(h.windows[2].zoomFactor, 1100 / 1200, 'reopened main window restores landscape scaling');
   });
   await check('Mac native menu supplies editing and quit shortcuts', async () => {
     const h = load();

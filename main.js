@@ -33,7 +33,7 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const store = require('./src/store');
 const watchHistory = require('./src/native/watch-history');
 const seriesSearch = require('./src/native/series-search');
-const { fitWindowBounds } = require('./src/native/window-layout');
+const { fitWindowBounds, getWindowScale } = require('./src/native/window-layout');
 const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
 const { fetchPublicDetails } = require('./src/native/public-details');
@@ -3875,12 +3875,18 @@ let windowLayout = 'landscape';
 let landscapeBounds = null;
 let layoutChanging = false;
 const stealth = createStealthController({ screen, getWindow: () => mainWindow });
+function syncMainWindowScale() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const scale = getWindowScale(windowLayout, mainWindow.getContentSize()[0], stealth.enabled);
+  mainWindow.webContents.setZoomFactor(scale);
+}
 ipcMain.handle('set-stealth-mode', async (event, enabled) => {
   if (!mainWindow || event.sender !== mainWindow.webContents || typeof enabled !== 'boolean') return { success: false, error: '无法切换小窗' };
   if (enabled && (mainWindow.isFullScreen() || layoutChanging)) return { success: false, error: '请先退出全屏，再开启隐身小窗' };
   try {
     episodePanel.close();
     stealth.setEnabled(enabled);
+    syncMainWindowScale();
     return { success: true };
   } catch (error) { return { success: false, error: error.message }; }
 });
@@ -3913,6 +3919,7 @@ ipcMain.handle('set-window-layout', async (event, mode) => {
     win.setMinimumSize(Math.min(mode === 'portrait' ? 420 : 900, bounds.width), Math.min(560, bounds.height));
     win.setBounds(bounds);
     windowLayout = mode;
+    syncMainWindowScale();
     return { success: true, mode };
   } catch (error) {
     return { success: false, error: error.message };
@@ -3944,6 +3951,11 @@ function createWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.on('resize', syncMainWindowScale);
+  mainWindow.on('enter-full-screen', syncMainWindowScale);
+  mainWindow.on('leave-full-screen', syncMainWindowScale);
+  mainWindow.webContents.on('did-finish-load', syncMainWindowScale);
+  syncMainWindowScale();
   rendererSecurity.protectWindow(mainWindow);
   episodePanel.attach(mainWindow);
   mainWindow.webContents.once('did-finish-load', () => {
@@ -4020,6 +4032,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
     app.on('activate', () => {
       stealth.setEnabled(false);
+      syncMainWindowScale();
       // 搜索窗口可能仍在后台，不能用所有窗口数量判断主窗口是否存在。
       if (!mainWindow || mainWindow.isDestroyed()) createWindow();
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -4056,7 +4069,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
           { role: 'minimize', label: '最小化' }, { role: 'close', label: '关闭窗口' },
           { type: 'separator' },
           { label: '回到主窗口', accelerator: 'CmdOrCtrl+1', click: () => app.emit('activate') },
-          { label: '退出隐身小窗', click: () => stealth.setEnabled(false) },
+          { label: '退出隐身小窗', click: () => { stealth.setEnabled(false); syncMainWindowScale(); } },
         ] },
       ]));
     }

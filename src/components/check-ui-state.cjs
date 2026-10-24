@@ -558,5 +558,40 @@ async function mount(file, api, props = {}) {
     assert.ok(ui.text().includes('磁盘空间不足')); assert.equal(ui.find(n => n.props['aria-label'] === '下载目录').props.value, '/new');
     assert.ok(!ui.text().includes('已保存')); ui.unmount();
   });
+  await test('settings retained drafts preserve newer playback options and retry explicit edits', async () => {
+    let stored = { root: '/old', auto_delete_watched: true, cache_next_episode: true, compat_mode: true };
+    let fail = true;
+    const submitted = [];
+    const ui = await mount('Settings', {
+      getSettings: async () => ({ ...stored }),
+      saveSettings: async next => {
+        submitted.push({ ...next });
+        if (fail) return { success: false, error: '磁盘空间不足' };
+        stored = { ...stored, ...next };
+        return { success: true };
+      },
+    });
+    await ui.flush();
+    ui.find(n => n.props['aria-label'] === '下载目录').props.onChange({ target: { value: '/new' } }); ui.render();
+    ui.setProps({ active: false });
+    stored = { ...stored, auto_delete_watched: false, cache_next_episode: false, compat_mode: false };
+    ui.setProps({ active: true }); await ui.flush();
+    await ui.button('保存设置').props.onClick(); await ui.flush();
+    assert.equal(Object.hasOwn(submitted.at(-1), 'auto_delete_watched'), false, 'unrelated save must not resubmit stale auto-delete');
+    assert.equal(ui.find(n => n.props['aria-label'] === '下载目录').props.value, '/new', 'failed save retains draft');
+    fail = false;
+    await ui.button('保存设置').props.onClick(); await ui.flush();
+    assert.equal(stored.root, '/new');
+    for (const key of ['auto_delete_watched', 'cache_next_episode', 'compat_mode']) assert.equal(stored[key], false, `preserve latest ${key}`);
+    const autoDelete = ui.find(n => n.type === 'label' && n.children.some(child => child?.props?.className === 'proxy-switch-text' && child.children[0] === '看完自动删除'));
+    autoDelete.children.find(n => n?.type === 'input').props.onChange({ target: { checked: true } }); ui.render();
+    await ui.button('保存设置').props.onClick(); await ui.flush();
+    assert.equal(stored.auto_delete_watched, true, 'explicit user edit must still apply');
+    stored.auto_delete_watched = false;
+    ui.find(n => n.props['aria-label'] === '下载目录').props.onChange({ target: { value: '/next' } }); ui.render();
+    await ui.button('保存设置').props.onClick(); await ui.flush();
+    assert.equal(stored.auto_delete_watched, false, 'successful save clears the earlier edit intent');
+    ui.unmount();
+  });
   process.exitCode = failures ? 1 : 0;
 })();

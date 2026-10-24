@@ -13,4 +13,8 @@ function fitWindowBounds(mode, current, workArea, previous) {
     width, height,
   };
 }
-module.exports = { fitWindowBounds };
+// A stable CSS viewport keeps desktop rows and poster columns intact while resizing.
+function getWindowScale(mode, contentWidth, stealth = false) {
+  return mode === 'landscape' && !stealth && contentWidth > 0 ? contentWidth / 1200 : 1;
+}
+module.exports = { fitWindowBounds, getWindowScale };

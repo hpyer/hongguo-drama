@@ -59,6 +59,7 @@ function SettingsPage({ active = true, preview = false }) {
   const [loadError, setLoadError] = useState('');
   const testVersion = useRef(0);
   const savingRef = useRef(false);
+  const editedKeys = useRef(new Set());
   const savedTimer = useRef(null);
 
   const loadSettings = async () => {
@@ -77,6 +78,7 @@ function SettingsPage({ active = true, preview = false }) {
   }, [active]);
 
   const update = (key, value) => {
+    editedKeys.current.add(key);
     setSettings((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
     setDirty(true);
@@ -97,16 +99,18 @@ function SettingsPage({ active = true, preview = false }) {
     setSaved(false);
     setSaveError('');
     try {
-      // Playback options may change while this retained settings page is hidden.
-      const current = await window.electronAPI.getSettings();
+      // Submit only edited fields; the main process merges newer playback options.
       const editable = ['root', 'name_format', 'download_quality', 'cache_next_episode', 'compat_mode', 'auto_delete_watched', 'show_danmaku_controls', 'max_concurrent', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'app_updates_enabled'];
-      const submitted = { ...current };
-      for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
+      const submitted = {};
+      for (const key of editable) {
+        if (Object.hasOwn(next, key) && (editedKeys.current.has(key) || isProxy && key.startsWith('proxy_'))) submitted[key] = next[key];
+      }
       if (isProxy) submitted.clear_proxy_password = next.clear_proxy_password === true && !String(next.proxy_password || '');
       const res = await window.electronAPI.saveSettings(submitted);
       if (!res?.success) throw new Error(res?.error || '设置未保存，请重试');
       if (isProxy) closeProxy();
       setSettings(await window.electronAPI.getSettings());
+      editedKeys.current.clear();
       setDirty(false);
       setSaved(true);
       clearTimeout(savedTimer.current);
