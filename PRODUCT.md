@@ -1,6 +1,6 @@
 # 红果短剧
 
-当前源码／发行目标：3.0。代理直连、合集清理与收藏离线播放修复见 `docs/release-3.0.md`；实际公开状态以 GitHub 发行页为准。
+当前正式版：3.0。代理直连、合集清理与收藏离线播放修复见 `docs/release-3.0.md`；实际公开状态以 GitHub 发行页为准。
 <!-- impeccable:product-schema 1 -->
 
 ## Platform
