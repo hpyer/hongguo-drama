@@ -83,6 +83,16 @@
   flex-shrink: 0;
 }
 
+.sequel-finder { margin-bottom: 12px; flex-shrink: 0; }
+.sequel-finder-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sequel-finder-results { margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+.sequel-finder-results p { margin: 4px 0; }
+.sequel-finder-error { color: var(--danger); }
+.sequel-finder-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; max-height: 160px; overflow-y: auto; }
+.sequel-finder-list li { min-width: 0; max-width: 100%; }
+.sequel-finder-list .btn { white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.layout-portrait .sequel-finder { max-height: 30%; overflow-y: auto; }
+
 .series-picker-btn.open {
   border-color: var(--accent);
   color: var(--accent);

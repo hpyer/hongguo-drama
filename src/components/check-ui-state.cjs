@@ -357,6 +357,19 @@ async function mount(file, api, props = {}) {
     assert.ok(ui.nodes().some(n => n.props.className === 'badge' && n.children.includes('西饭短剧')));
     cards[1].props.onClick(); await ui.flush(); assert.equal(resolved[0], 'xifan:test:123'); assert.equal(picked[0].series_id, 'xifan:test:123'); ui.unmount();
   });
+  await test('season search ranks matching titles and exposes supplemental failures without hiding results', async () => {
+    const exact = { series_id: '123', series_title: '双子房客' }, next = { series_id: '124', series_title: '双子房客第三季' };
+    const ui = await mount('SearchPanel', { searchSeries: async (_kw, { source }) => source === 'hongguo'
+      ? { success: true, results: [{ series_id: '125', series_title: '其他短剧' }, next, exact, exact], partial: true, error: '补充搜索未完成：连接超时' }
+      : { success: true, results: [] } });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '双子房客' } }); ui.render(); ui.button('搜索').props.onClick(); await ui.flush();
+    const cards = ui.nodes().filter(n => n.props.className?.startsWith('search-card '));
+    assert.deepEqual(cards.map(card => card.props.title), ['点击查看并下载：双子房客', '点击查看并下载：双子房客第三季', '点击查看并下载：其他短剧']);
+    assert.ok(ui.text().includes('找到 2 部标题匹配短剧')); assert.ok(ui.text().includes('其他结果（排在后面）'));
+    assert.ok(ui.text().includes('补充搜索未完成：连接超时')); assert.ok(ui.find(n => n.props.role === 'status'));
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '新的剧名' } }); ui.render();
+    assert.ok(!ui.text().includes('补充搜索未完成')); ui.unmount();
+  });
   await test('all-source search keeps successful results when the other source fails', async () => {
     for (const failure of [{ success: false, error: '来源暂不可用' }, new Error('连接超时')]) {
       const ui = await mount('SearchPanel', { searchSeries: async (kw, { source }) => { if (source === 'hongguo') return { success: true, results: [{ series_id: '123', series_title: '仍可查看' }] }; if (failure instanceof Error) throw failure; return failure; } });

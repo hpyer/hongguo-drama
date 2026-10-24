@@ -1,4 +1,4 @@
-// Hongguo Drama 3.0: platform-independent checks plus all native and renderer unit tests. Skips Windows installers,
+// Hongguo Drama 3.1: platform-independent checks plus all native and renderer unit tests. Skips Windows installers,
 // real FFmpeg/media fixtures, and Electron GUI launches.
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');

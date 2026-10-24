@@ -14,8 +14,8 @@ const FORMAT_PRESETS = [
 ];
 
 const PROXY_MODES = [
-  { value: 'system', label: '跟随系统', desc: '使用系统 / 环境变量里已有的代理设置' },
-  { value: 'custom', label: '手动指定', desc: '自己填写代理地址与端口（支持 HTTP/HTTPS 代理）' },
+  { value: 'system', label: '跟随系统', desc: '接口与下载读取启动环境代理；发现页等浏览器请求使用系统代理' },
+  { value: 'custom', label: '手动指定', desc: '填写 HTTP/HTTPS 代理地址与端口，忽略环境变量中的绕过规则（NO_PROXY）' },
   { value: 'direct', label: '强制直连', desc: '忽略一切代理，直接连接' },
 ];
 
@@ -42,7 +42,7 @@ function describeProxy(settings) {
     if (!host) return { on: false, text: '已开启，但未填写代理地址' };
     return { on: true, text: `${host}${port ? ':' + port : ''}` };
   }
-  return { on: true, text: '跟随系统 / 环境变量代理' };
+  return { on: true, text: '接口/下载跟随启动环境，浏览器跟随系统' };
 }
 
 function SettingsPage({ active = true, preview = false }) {
@@ -303,7 +303,7 @@ function SettingsPage({ active = true, preview = false }) {
             </button>
           </div>
           <p className="settings-hint">
-            本机有代理（Clash / V2rayN 等）时在这里填上，解析剧集与下载视频都会走该代理。保存后立即生效，无需重启。
+            手动代理用于接口、下载和应用内浏览器；跟随系统时，接口与下载读取启动时的环境代理及绕过规则，发现页等浏览器请求使用系统代理。保存后立即生效。
           </p>
         </div>
 
@@ -465,6 +465,7 @@ function SettingsPage({ active = true, preview = false }) {
                 )}
               </div>
 
+              <p className="settings-hint">测试仅检查接口与下载访问百度的连接，不代表发现页等浏览器请求的代理状态。</p>
               {testResult && (
                 <div className={`proxy-test-result ${testResult.success ? 'ok' : 'fail'}`}>
                   {testResult.success ? <Check size={15} /> : <AlertCircle size={15} />}

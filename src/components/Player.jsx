@@ -6,6 +6,7 @@ import OfficialDanmaku, { useOfficialDanmaku } from './OfficialDanmaku';
 import { useDanmakuSource, writeDanmakuSource } from './danmakuSource.mjs';
 import { SHORTCUT_ACTIONS, formatShortcut, ignoresPlaybackShortcut, readShortcuts, shortcutKey, subscribeShortcuts } from '../shortcuts';
 import CommunityPanel from './CommunityPanel';
+import SequelFinder from './SequelFinder';
 import VideoEnhancement, { useVideoEnhancement } from './VideoEnhancement';
 import './Player.css';
 import { Play, Film, Download, Check, RefreshCw, Layers, X, Trash2, ChevronDown, Zap } from './icons';
@@ -71,6 +72,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const [mediaBuffering, setMediaBuffering] = useState(false);
   const [onlineProgress, setOnlineProgress] = useState(null); // {percent, phase}
   const [cacheInfo, setCacheInfo] = useState({ count: 0, bytes: 0 });
+  const [downloadedRevision, setDownloadedRevision] = useState(0);
   const [downloadedMap, setDownloadedMap] = useState({}); // series_id -> {completed,total}
   const [storageMap, setStorageMap] = useState({});       // series_id -> {files,bytes}
   const [storageTotal, setStorageTotal] = useState({ files: 0, bytes: 0 });
@@ -357,6 +359,23 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + u[i];
   };
 
+  const deleteDownloadedFiles = async (remove) => {
+    try {
+      const result = await remove();
+      let message;
+      if (result?.success) message = `已删除 ${result.count} 个文件，释放 ${fmtSize(result.freed)}`;
+      else if (Number.isFinite(result?.count) && Number.isFinite(result?.failed)) {
+        message = `已删除 ${result.count} 个文件，${result.failed} 个删除失败${result.error ? `：${result.error}` : ''}`;
+      } else message = result?.error || '删除失败';
+      showToast(message + (result?.warning ? `；${result.warning}` : ''));
+    } catch (error) {
+      showToast(error.message || '删除失败，请重试');
+    } finally {
+      setDownloadedRevision(revision => revision + 1);
+      await Promise.all([loadDetail(activeSeriesId), refreshCacheInfo()]);
+    }
+  };
+
   useEffect(() => {
     refreshCacheInfo();
     window.electronAPI.getSettings().then((s) => {
@@ -402,7 +421,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     });
   }, []);
 
-  // 打开剧集面板时，补全各剧的下载进度（只拉一次）
+  // 打开剧集面板或删除文件后，补全各剧的下载进度。
   useEffect(() => {
     if (!pickerOpen) return;
     let cancelled = false;
@@ -418,7 +437,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       if (!cancelled) setDownloadedMap(map);
     })();
     return () => { cancelled = true; };
-  }, [pickerOpen, seriesList]);
+  }, [pickerOpen, seriesList, downloadedRevision]);
 
   useEffect(() => {
     if (!window.electronAPI.onOnlinePlayProgress) return undefined;
@@ -1242,6 +1261,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         </div>
       </div>
 
+      <SequelFinder seriesId={activeSeriesId} active={active && !actionsHidden} />
+
       <div className="player-management" id="player-management" hidden={!managementOpen || actionsHidden}>
           <p className="player-download-quality-hint" id="player-download-quality-hint">手动下载使用此项；在线播放选“自动”时，下载回退也使用此项。画质不可用会提示，不自动降级；已有文件保留。</p>
           <label className="player-download-quality">
@@ -1339,14 +1360,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
                                   danger: true,
                                   onOk: async () => {
                                     if (String(s.series_id) === selectedSeriesRef.current && !onlineUrl && !compatMap[currentIndex]) stopPlayback('本地播放已停止，可重新连接片源观看');
-                                    const r = await window.electronAPI.deleteSeriesFiles(s.series_id);
-                                    if (r && r.success) {
-                                      showToast(`已删除 ${r.count} 个文件，释放 ${fmtSize(r.freed)}`);
-                                      await loadDetail(activeSeriesId);
-                                      refreshCacheInfo();
-                                    } else {
-                                      showToast((r && r.error) || '删除失败');
-                                    }
+                                    await deleteDownloadedFiles(() => window.electronAPI.deleteSeriesFiles(s.series_id));
                                   },
                                 });
                               }}
@@ -1391,14 +1405,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
                     danger: true,
                     onOk: async () => {
                       if (current?.fileUrl && !onlineUrl && !compatMap[currentIndex]) stopPlayback('本地播放已停止，可重新连接片源观看');
-                      const r = await window.electronAPI.deleteAllDownloaded();
-                      if (r && r.success) {
-                        showToast(`已删除 ${r.count} 个文件，释放 ${fmtSize(r.freed)}`);
-                        await loadDetail(activeSeriesId);
-                        refreshCacheInfo();
-                      } else {
-                        showToast((r && r.error) || '删除失败');
-                      }
+                      await deleteDownloadedFiles(() => window.electronAPI.deleteAllDownloaded());
                     },
                   });
                 }}

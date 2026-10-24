@@ -37,6 +37,10 @@ export default function App() {
   const [pinBusy, setPinBusy] = useState(false);
   const layoutLock = useRef(false);
   const [page, setPage] = useState('browse');
+  const pageRef = useRef('browse');
+  const calendarRequest = useRef(0);
+  const calendarOpeningRef = useRef(false);
+  const [calendarOpening, setCalendarOpening] = useState('');
   const [visited, setVisited] = useState(['browse']);
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
@@ -65,13 +69,17 @@ export default function App() {
     return window.electronAPI.onNavigate((data) => {
       if (!data || !data.page) return;
       if (data.payload) setPlayerTarget({ ...data.payload, ts: Date.now() });
-      setVisited((pages) => pages.includes(data.page) ? pages : [...pages, data.page]);
-      if (data.page === 'player' || data.page === 'feed') setPlayerMounted(data.page === 'player');
-      setPage(data.page);
+      navigate(data.page);
     });
   }, []);
 
   const navigate = (nextPage) => {
+    if (nextPage !== pageRef.current) {
+      calendarRequest.current++;
+      calendarOpeningRef.current = false;
+      setCalendarOpening('');
+      pageRef.current = nextPage;
+    }
     if (nextPage === 'player' || nextPage === 'feed') setPlayerMounted(nextPage === 'player');
     setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
@@ -86,17 +94,27 @@ export default function App() {
       case 'feed':
         return page === 'feed' ? <DramaFeed onNavigate={navigate} /> : null;
       case 'calendar':
-        return <ReleaseCalendar onPlay={async ({ seriesId }) => {
+        return <ReleaseCalendar opening={calendarOpening} active={page === id} onPlay={async ({ seriesId }) => {
+          if (pageRef.current !== 'calendar' || calendarOpeningRef.current) return;
+          const version = ++calendarRequest.current;
+          calendarOpeningRef.current = true;
+          setCalendarOpening(seriesId);
           try {
             const payload = { seriesId, resume: true };
             let result = await window.electronAPI.playSeries(payload);
-            if (!result?.success && result?.error === '未找到短剧档案，请重新打开详情') {
+            if (version !== calendarRequest.current) return;
+            if (!result?.success && result?.code === 'SERIES_NOT_FOUND') {
               const resolved = await window.electronAPI.searchResolve(seriesId);
+              if (version !== calendarRequest.current) return;
               if (!resolved?.success) throw new Error(resolved?.error || '加载剧集失败，请重试');
               result = await window.electronAPI.playSeries(payload);
             }
             if (!result?.success) throw new Error(result?.error || '打开播放失败，请重试');
-          } catch (error) { setStorageError(error.message); }
+          } catch (error) {
+            if (version === calendarRequest.current) setStorageError(error.message);
+          } finally {
+            if (version === calendarRequest.current) { calendarOpeningRef.current = false; setCalendarOpening(''); }
+          }
         }} />;
       case 'history':
         return <WatchHistory active={page === id} onNavigate={navigate} />;

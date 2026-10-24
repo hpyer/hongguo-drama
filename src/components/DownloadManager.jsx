@@ -275,7 +275,11 @@ function DownloadManager({ onNavigate, active = true }) {
           const ids = items.map((t) => t.id);
           const res = await window.electronAPI.deleteTasksWithFiles(ids, deleteFiles);
           await Promise.all([refresh(), loadSeriesList()]);
-          if (!res?.success) throw new Error(res?.error || '删除失败，请重试');
+          if (!res?.success) {
+            const progress = Number.isFinite(res?.count) && Number.isFinite(res?.freed)
+              ? `已移除 ${res.count} 个任务记录，已释放 ${fmtSize(res.freed)}；` : '';
+            throw new Error(progress + (res?.error || '删除失败，请重试'));
+          }
           showToast(deleteFiles
             ? `已删除 ${res.count} 个任务，释放 ${fmtSize(res.freed)}`
             : `已删除 ${res.count} 个任务记录（本地文件已保留）`);
