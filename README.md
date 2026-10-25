@@ -433,13 +433,15 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前正式版为 **3.3**（内部 3.3.0），下载降级与 Mac 界面缩放的改动及验收边界见 [3.3 说明](docs/release-3.3.md)。
+当前正式版为 **3.4**（内部 3.4.0），搜索、便携资料与安全修复及验收边界见 [3.4 说明](docs/release-3.4.md)。冻结源码 `241ada2d604ce65dc15d3c4df3686716ece61865`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40207906101) 通过；随机真实两集的下载、播放、定位、全屏与切集已验，最终签名包已隔离启动/退出。音轨解码通过，未将其等同于人工听感确认；App 搜索仍是默认关闭的实验选项。
+
+上一正式版 **3.3**（内部 3.3.0）的下载降级与 Mac 界面缩放记录见 [3.3 说明](docs/release-3.3.md)。以下保留其历史验收结果，不代替 3.4 验收。
 
 3.3 安装包、对应源码与校验文件见 [3.3 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3)。三端 16 项资产已公开并核对远端 SHA256；双 Mac 应用与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订；Windows CI 安装、重装、跨版本升级与便携媒体检查通过，EXE 未签名。 Windows 构建记录：[本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40156845982)。
 
 冻结源码 `1f152862ac9bc23f0a2ad2340a32ad7a62a4aaec`；后续文档提交不改变 v3.3 标签及已发布安装包、更新包和对应源码包的字节。 源码候选随机真实两集下载与播放、快进／回退、全屏、切集及受控 720P 降级通过，用户确认声音正常。最终已签名 arm64 包隔离启动、90% 缩放、恢复 100% 与正常退出通过；未在最终包重复真实播放。
 
-上一正式版 **3.2** 的片单缓存、刷新恢复与验证记录保留于 [3.2 说明](docs/release-3.2.md) 和 [3.2 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。其冻结源码 `fe110c68f9e2a1eceb059be222901d2d37926a5d` 及已发布资产保持不变；3.2 未覆盖本机正式安装，更早变更见 [3.1 说明](docs/release-3.1.md)。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替 3.2 或 3.3 验收，也不代表实体电脑完整覆盖。
+更早正式版 **3.2** 的片单缓存、刷新恢复与验证记录保留于 [3.2 说明](docs/release-3.2.md) 和 [3.2 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。其冻结源码 `fe110c68f9e2a1eceb059be222901d2d37926a5d` 及已发布资产保持不变；3.2 未覆盖本机正式安装，更早变更见 [3.1 说明](docs/release-3.1.md)。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替后续版本验收，也不代表实体电脑完整覆盖。
 
 本版不宣称修复批量下载黑屏或闪退反馈；相关问题仍需要对应设备与复现场景核实。
 
