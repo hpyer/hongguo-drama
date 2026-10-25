@@ -35,6 +35,12 @@
 .drama-feed-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; min-height: 330px; text-align: center; padding: 32px; }
 .drama-feed-state h3, .drama-feed-state p { margin: 0; }
 .drama-feed-state p { color: var(--text-secondary); line-height: 1.8; max-width: 60ch; overflow-wrap: anywhere; }
+.drama-feed-updating { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; color: var(--text-secondary); font-size: 12px; }
+.drama-feed-updating .btn { margin-left: auto; }
+.drama-feed-notice { margin: 0 0 14px; color: var(--text-secondary); font-size: 12px; line-height: 1.8; }
+.drama-feed-update-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--danger-bg); color: var(--danger); font-size: 12px; line-height: 1.8; }
+.drama-feed-update-error span { overflow-wrap: anywhere; }
+.drama-feed-update-error .btn { flex-shrink: 0; }
 .drama-feed button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .drama-text-button { border: 0; border-radius: 5px; background: transparent; padding: 7px 2px; color: var(--accent-text); text-decoration: underline; text-underline-offset: 4px; font-size: 12px; }
 .drama-text-button:hover { color: var(--accent-hover); }

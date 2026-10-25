@@ -13,6 +13,9 @@
 .genre-chip:hover { background: var(--bg-inset); }
 .genre-chip.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .browse-loading { display: flex; gap: 10px; align-items: center; color: var(--text-secondary); padding: 22px 0; }
+.browse-update-error { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 0 0 22px; }
+.browse-update-error span { min-width: 0; overflow-wrap: anywhere; }
+.browse-update-error .btn { flex-shrink: 0; }
 .browse-grid, .poster-skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 26px 20px; margin-bottom: 30px; }
 .browse-card { display: block; text-align: left; border: 0; padding: 0; background: transparent; min-width: 0; align-self: start; }
 .browse-cover { width: 100%; position: relative; aspect-ratio: 3/4; background: var(--bg-inset); overflow: hidden; border-radius: 12px; box-shadow: 0 5px 14px #2a221713; }

@@ -114,7 +114,7 @@ async function mount(file, api, props = {}) {
     render();
   }
   const advanceTimers = (ms) => { for (const [id, timer] of [...timers]) if (timer.delay <= ms) { timers.delete(id); timer.fn(); } };
-  return { render, flush, find, nodes, button, advanceTimers, setProps: next => { props = { ...props, ...next }; render(); }, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
+  return { render, flush, find, nodes, button, advanceTimers, dispatchEvent: event => window.dispatchEvent(event), setProps: next => { props = { ...props, ...next }; render(); }, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
 }
 
 (async () => {
@@ -185,6 +185,150 @@ async function mount(file, api, props = {}) {
     ui.button('摇一摇').props.onClick(); await ui.flush();
     assert.ok(ui.find(n => n.type?.name === 'RandomDrama'), 'random discovery remains available');
     ui.unmount();
+  });
+  await test('feed keeps the current playlist during background refresh and after failures', async () => {
+    const gates = new Map();
+    const requests = [];
+    const lists = {
+      'hot-drama': [
+        { series_id: '1000001', series_title: '热播旧片单', rank: 1 },
+        { series_id: '1000002', series_title: '热播第二部', rank: 2 },
+      ],
+      'hot-real-drama': [{ series_id: '2000001', series_title: '真人新片单', rank: 1 }],
+    };
+    const ui = await mount('DramaFeed', {
+      getMediaSources: async () => ({ success: true, sources: [{ id: 'hongguo', label: '红果短剧' }] }),
+      browseList: request => {
+        requests.push(request);
+        const gate = gates.get(request.category);
+        return gate ? gate.promise : Promise.resolve({ success: true, results: lists[request.category] || [] });
+      },
+    });
+    await ui.flush();
+    assert.ok(ui.text().includes('热播旧片单'), 'first load must render the ranking');
+    ui.button('下一部').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('第 2 / 2 部'));
+
+    const failed = deferred(); gates.set('hot-drama', failed);
+    ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('热播第二部'), 'manual refresh must keep the current playlist while it loads');
+    assert.ok(ui.text().includes('正在更新片单'), 'background refresh needs a visible status');
+    assert.equal(requests.at(-1).forceRefresh, true, 'manual refresh must bypass caches');
+    failed.resolve({ success: false, error: '目录加载超时，请重试' }); await ui.flush();
+    assert.ok(ui.text().includes('热播第二部'), 'failed refresh must keep the old playlist');
+    assert.ok(ui.text().includes('目录加载超时'));
+    assert.ok(ui.text().includes('第 2 / 2 部'), 'failed refresh must keep the current selection');
+
+    const reordered = deferred(); gates.set('hot-drama', reordered);
+    ui.button('刷新片单').props.onClick(); await ui.flush();
+    reordered.resolve({ success: true, results: [
+      { series_id: '1000002', series_title: '热播第二部', rank: 1 },
+      { series_id: '1000001', series_title: '热播旧片单', rank: 2 },
+    ] }); await ui.flush();
+    assert.ok(ui.text().includes('第 1 / 2 部'), 'successful refresh must keep the selected drama instead of jumping to the first entry');
+    assert.ok(ui.find(n => n.type === 'h3')?.children?.includes('热播第二部'), 'selected drama must follow its series id');
+
+    const real = deferred(); gates.set('hot-real-drama', real);
+    ui.button('真人短剧').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('正在加载真实片单'), 'a category without cache still shows its first-load state');
+    assert.ok(!ui.text().includes('热播第二部'), 'another category must not show the previous list');
+    real.resolve({ success: true, results: lists['hot-real-drama'] }); await ui.flush();
+    assert.ok(ui.text().includes('真人新片单'));
+
+    const back = deferred(); gates.set('hot-drama', back);
+    ui.button('热播总榜').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('热播第二部'), 'returning to a category must paint its cached list first');
+    assert.ok(ui.text().includes('正在更新片单'));
+    assert.ok(!requests.at(-1).forceRefresh, 'background revalidation must not force a bypass');
+    back.resolve({ success: true, results: [] }); await ui.flush();
+    assert.ok(ui.text().includes('热播第二部'), 'an empty response must not wipe the last good playlist');
+    assert.ok(ui.text().includes('没有返回片单'));
+
+    const cancelled = deferred(); gates.set('hot-drama', cancelled);
+    ui.button('刷新片单').props.onClick(); await ui.flush();
+    ui.button('取消加载').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('已取消更新'), 'cancelling a background refresh needs feedback');
+    assert.ok(ui.text().includes('热播第二部'));
+    cancelled.resolve({ success: true, results: [] }); await ui.flush();
+    assert.ok(ui.text().includes('热播第二部'), 'a cancelled request must not replace the visible list');
+    ui.unmount();
+  });
+  await test('feed preserves selection made while a cached category revalidates', async () => {
+    let pending;
+    const results = [
+      { series_id: '1000001', series_title: '第一部', rank: 1 },
+      { series_id: '1000002', series_title: '第二部', rank: 2 },
+    ];
+    const ui = await mount('DramaFeed', {
+      getMediaSources: async () => ({ success: true, sources: [{ id: 'hongguo', label: '红果' }] }),
+      browseList: request => request.category === 'hot-drama' && pending ? pending.promise : Promise.resolve({ success: true, results }),
+    });
+    try {
+      await ui.flush();
+      ui.button('真人短剧').props.onClick(); await ui.flush();
+      pending = deferred();
+      ui.button('热播总榜').props.onClick(); await ui.flush();
+      ui.button('下一部').props.onClick(); await ui.flush();
+      assert.ok(ui.find(n => n.type === 'h3').children.includes('第二部'));
+      pending.resolve({ success: true, results }); await ui.flush();
+      assert.ok(ui.find(n => n.type === 'h3').children.includes('第二部'), 'background completion must retain the selection made while browsing cached items');
+    } finally { ui.unmount(); }
+  });
+  await test('feed cancels pending playback when source configuration changes', async () => {
+    const pending = deferred(), played = [];
+    let slow = true, registryLoads = 0;
+    const ui = await mount('DramaFeed', {
+      getMediaSources: async () => { registryLoads++; return { success: true, sources: [{ id: 'hongguo', label: '红果' }] }; },
+      browseList: async () => ({ success: true, results: [{ series_id: '1000001', series_title: '第一部', rank: 1 }] }),
+      searchResolve: id => slow ? pending.promise : Promise.resolve(ok(detail(id))),
+      playSeries: async request => { played.push(request); return { success: true }; },
+    });
+    try {
+      await ui.flush();
+      const opening = ui.button('在剧库播放').props.onClick(); await ui.flush();
+      ui.dispatchEvent(new Event('custom-sources-changed')); await ui.flush();
+      assert.equal(registryLoads, 2, 'source event must reach the real registry store');
+      pending.resolve(ok(detail('1000001'))); await opening; await ui.flush();
+      assert.equal(played.length, 0, 'a resolve from before the source revision must not open the player');
+      slow = false;
+      assert.equal(ui.button('在剧库播放').props.disabled, false);
+      await ui.button('在剧库播放').props.onClick(); await ui.flush();
+      assert.equal(played.length, 1, 'playback must work again with the new source revision');
+    } finally { ui.unmount(); }
+  });
+  await test('browse categories: empty refresh preserves cached cards and pagination', async () => {
+    let empty = false, realCalls = 0;
+    const ui = await mount('Browse', {
+      getSeriesList: async () => [],
+      browseCategories: async () => [{ slug: 'real-drama', label: '真人剧' }, { slug: 'comic', label: '漫画' }],
+      browseList: async request => {
+        if (request.category === 'comic') return { success: true, results: [], unsupported: true, emptyMessage: '这里是图文漫画' };
+        realCalls++;
+        return empty ? { success: true, results: [] } : { success: true,
+          results: [{ series_id: '1000001', series_title: '已加载片单' }], total: 48, totalPages: 2,
+          genres: [{ slug: 'romance', label: '爱情' }] };
+      },
+    });
+    const cards = () => ui.nodes().filter(n => n.props.className === 'browse-card');
+    try {
+      await ui.flush();
+      assert.equal(cards().length, 1);
+      empty = true;
+      await ui.button('刷新片单').props.onClick(); await ui.flush();
+      assert.equal(cards().length, 1, 'empty refresh must not erase the last good discovery list');
+      assert.ok(ui.text().includes('仍显示上次片单'));
+      assert.equal(ui.find(n => n.props.className === 'browse-error-state'), undefined, 'cached cards must not be pushed below a full empty-state error');
+      assert.ok(ui.text().includes('共 48 部'), 'total must remain from the cached list');
+      assert.ok(ui.button('爱情'), 'genres must remain from the cached list');
+      assert.ok(ui.nodes().some(n => n.type === 'button' && n.children.includes(2)), 'pagination must remain available');
+      const callsAfterRefresh = realCalls;
+      ui.button('漫画').props.onClick(); await ui.flush();
+      assert.equal(cards().length, 0, 'unsupported categories must not borrow another category cache');
+      assert.ok(ui.text().includes('这里是图文漫画'));
+      ui.button('真人剧').props.onClick(); await ui.flush();
+      assert.equal(cards().length, 1, 'returning must restore the retained cache');
+      assert.equal(realCalls, callsAfterRefresh, 'empty refresh must not delete a still-fresh cache');
+    } finally { ui.unmount(); }
   });
   await test('closing a loading detail ignores its late result', async () => {
     const pending = deferred();
@@ -324,7 +468,7 @@ async function mount(file, api, props = {}) {
     assert.ok(ui.text().includes('已取消')); assert.ok(ui.text().includes('已加载片单'));
     pending.resolve({ success: false, error: '来源不可用' }); await ui.flush();
     assert.ok(!ui.text().includes('来源不可用'), 'cancelled request must not overwrite cancellation');
-    ui.button('重新加载').props.onClick(); await ui.flush();
+    ui.button('重试').props.onClick(); await ui.flush();
     assert.ok(ui.text().includes('来源不可用')); assert.ok(ui.text().includes('已加载片单')); ui.unmount();
   });
 
