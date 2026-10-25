@@ -1696,7 +1696,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         <h3 id="player-download-heading">下载清晰度</h3>
         <div className="player-management-actions">
             <select className="input-field" aria-labelledby="player-download-heading" value={downloadQuality} disabled={qualityLoading}
-              title="手动下载及自动画质的下载回退使用此项。画质不可用会提示，不自动降级；已有文件保留。"
+              title="手动下载及自动画质的下载回退使用此项。红果片源所选清晰度不可用或下载失败时，自动尝试更低清晰度，并在下载管理中提示；已有文件保留。"
               onChange={(event) => setDownloadQuality(event.target.value)}>
               <option value="auto">自动（兼容优先）</option>
               <option value="1080p">1080P</option>

@@ -228,6 +228,7 @@ async function requestJson(url, options, deadline, signal) {
 
 async function fetchAppPlayUrl(vid, options = {}) {
     const requestedQuality = normalizeDownloadQuality(options.quality);
+    const allowLowerQuality = options.allowLowerQuality === true && requestedQuality !== 'auto';
     vid = String(vid || '');
     if (!/^\d{1,30}$/.test(vid)) throw new Error('分集编号无效');
     const deadline = Date.now() + 12000;
@@ -259,10 +260,14 @@ async function fetchAppPlayUrl(vid, options = {}) {
             .map(pair => pair.map(Number)).find(pair => pair.every(value => Number.isFinite(value) && value > 0)) || [0, 0];
         const pixels = width && height ? Math.min(width, height) : Number(quality.match(/\d+/)?.[0] || 0);
         return { item, codec, codecRank, quality, pixels, width, height };
-    }).filter(row => row.codecRank < 2 && meetsDownloadQuality(row, requestedQuality)).sort((a, b) => requestedQuality === 'auto'
-        ? a.codecRank - b.codecRank || b.pixels - a.pixels
-        : Math.min(a.width, a.height) - Math.min(b.width, b.height) || a.codecRank - b.codecRank);
-    if (!rows.length) throw new Error(requestedQuality === 'auto'
+    }).filter(row => row.codecRank < 2 && (allowLowerQuality || meetsDownloadQuality(row, requestedQuality))).sort((a, b) => {
+        if (requestedQuality === 'auto') return a.codecRank - b.codecRank || b.pixels - a.pixels;
+        const aMeets = meetsDownloadQuality(a, requestedQuality), bMeets = meetsDownloadQuality(b, requestedQuality);
+        if (aMeets !== bMeets) return Number(bMeets) - Number(aMeets);
+        const aPixels = Math.min(a.width, a.height), bPixels = Math.min(b.width, b.height);
+        return (aMeets ? aPixels - bPixels : bPixels - aPixels) || a.codecRank - b.codecRank;
+    });
+    if (!rows.length) throw new Error(requestedQuality === 'auto' || allowLowerQuality
         ? '本集暂未提供兼容的 H.264/HEVC 片源'
         : `本集暂无尺寸可确认且满足 ${requestedQuality} 的 H.264/HEVC 片源，未降级`);
     let lastError;
@@ -284,7 +289,7 @@ async function fetchAppPlayUrl(vid, options = {}) {
                     if (seen.has(identity)) continue;
                     seen.add(identity);
                     variants.push({ url, contentKey, codec: selected.codec === 'bytevc1' ? 'hevc' : selected.codec, source: 'app', vid,
-                        userAgent: VIDEO_UA, quality: requestedQuality === 'auto' ? selected.quality : requestedQuality,
+                        userAgent: VIDEO_UA, quality: allowLowerQuality ? (selected.width && selected.height ? `${Math.min(selected.width, selected.height)}p` : '') : requestedQuality === 'auto' ? selected.quality : requestedQuality,
                         ...(requestedQuality === 'auto' ? {} : { width: selected.width, height: selected.height }) });
                 } catch (error) { lastError = error; }
             }

@@ -364,7 +364,7 @@ function HongguoDownload({ onNavigate, active = true }) {
             </div>
           </div>
 
-          <p className="settings-hint batch-quality-hint" id="batch-quality-hint">新建下载任务生效；所选清晰度不可用时提示，不自动降级。已有文件不自动删除或覆盖。</p>
+          <p className="settings-hint batch-quality-hint" id="batch-quality-hint">新建下载任务生效；红果片源所选清晰度不可用或下载失败时，自动尝试更低清晰度，并在下载管理中提示。已有文件不自动删除或覆盖。</p>
 
           {seriesData.web_accessible_episodes != null && seriesData.web_accessible_episodes < seriesData.total && (
             <p className="settings-hint">网页源提供前 {seriesData.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</p>

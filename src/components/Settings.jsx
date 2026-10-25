@@ -273,7 +273,7 @@ function SettingsPage({ active = true, preview = false }) {
             <option value="1080p">1080P</option>
             <option value="720p">720P</option>
           </select>
-          <p className="settings-hint" id="default-download-quality-hint">保存后用于新建下载任务，也可在下载时单独选择。所选清晰度不可用时提示，不自动降级；已有文件不自动删除或覆盖。</p>
+          <p className="settings-hint" id="default-download-quality-hint">保存后用于新建下载任务，也可在下载时单独选择。红果片源所选清晰度不可用或下载失败时，自动尝试更低清晰度，并在下载管理中提示；已有文件不自动删除或覆盖。</p>
         </div>
 
         <div className="settings-group">

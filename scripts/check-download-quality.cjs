@@ -28,7 +28,7 @@ function routeFixture(appError = false) {
       'player_(series_id)/(vid)/page': { vid: '11', series_id: '1', seriesDetail: { series_id: '1' }, publicVideoSeo: { available: true, itemId: '11', seriesId: '1' } },
     } })}</script><script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', url: 'https://hongguoduanju.com/player/1/11', contentUrl: mediaUrl('web') })}</script>` }; } },
     './app-source': { fetchAppPlayUrl: async (_vid, options) => {
-      calls.push(options.quality);
+      calls.push(options.allowLowerQuality ? options.quality + ':fallback' : options.quality);
       if (appError) throw new Error('没有符合所选清晰度的片源');
       return { url: mediaUrl(`${options.quality}-${calls.length}`), quality: options.quality };
     } },
@@ -38,6 +38,23 @@ function routeFixture(appError = false) {
   return { ...native, calls };
 }
 const checks = [
+  ['download fallback keeps all lower tiers in descending order without changing strict playback', async () => {
+    const f = appFixture({ low: stream('360', 360, 640), mid: stream('720', 720, 1280), high: stream('1080', 1080, 1920), sd: stream('480', 480, 854) });
+    const result = await f.fetchAppPlayUrl('11', { quality:'1080p', allowLowerQuality:true });
+    assert.deepEqual(Array.from(result.variants, item => item.url), ['1080','720','480','360'].map(mediaUrl));
+    assert.equal(result.variants[1].quality, '720p');
+    const onlyLow = await appFixture({ low:stream('480',480,854) }).fetchAppPlayUrl('11',{quality:'1080p',allowLowerQuality:true});
+    assert.equal(onlyLow.quality,'480p');
+    await assert.rejects(f.fetchAppPlayUrl('11',{quality:'4k',allowLowerQuality:true}), /清晰度/);
+  }],
+  ['download fallback cache never leaks lower variants into strict playback', async () => {
+    const f = routeFixture();
+    const strict = await f.fetchPlayUrlSingle('11','1',{quality:'1080p'});
+    const fallback = await f.fetchPlayUrlSingle('11','1',{quality:'1080p',allowLowerQuality:true});
+    assert.notEqual(fallback.url,strict.url);
+    assert.equal((await f.fetchPlayUrlSingle('11','1',{quality:'1080p'})).url,strict.url);
+    assert.deepEqual(f.calls,['1080p','1080p:fallback']);
+  }],
   ['1080 rejects a fake label with only 720 pixels', async () => {
     await assert.rejects(appFixture({ fake: stream('fake', 720, 1280) }).fetchAppPlayUrl('11', { quality: '1080p' }), /1080p/);
   }],

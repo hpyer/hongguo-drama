@@ -77,7 +77,7 @@ test('lock owner starts once; repeated launches restore its existing window', as
     assert.equal(h.events.find(event => event[0] === 'store')[1], path.join(expectedDirectory, 'data.json'));
     h.events.length = 0;
     h.app.emit('second-instance');
-    assert.equal(h.context.fixtureWindow.zoomFactor, 1100 / 1200, 'activation reapplies landscape scaling');
+    assert.equal(h.context.fixtureWindow.zoomFactor, 1, 'activation reapplies saved font size');
     assert.deepEqual(h.events.map(event => event[0]), ['restore', 'show', 'focus']);
     vm.runInContext('mainWindow = null', h.context);
     h.events.length = 0;

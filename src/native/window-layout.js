@@ -13,8 +13,15 @@ function fitWindowBounds(mode, current, workArea, previous) {
     width, height,
   };
 }
-// A stable CSS viewport keeps desktop rows and poster columns intact while resizing.
-function getWindowScale(mode, contentWidth, stealth = false) {
-  return mode === 'landscape' && !stealth && contentWidth > 0 ? contentWidth / 1200 : 1;
+// Window resizing changes available space, never the user's chosen text size.
+function getWindowScale(value = 1) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(2, Math.max(0.5, value)) : 1;
 }
-module.exports = { fitWindowBounds, getWindowScale };
+function saveWindowZoom(store, direction) {
+  if (!['in', 'out', 'reset'].includes(direction)) throw new Error('Invalid zoom direction');
+  const settings = store.getSettings() || {};
+  const current = getWindowScale(settings.ui_zoom);
+  const next = direction === 'reset' ? 1 : Math.round((current + (direction === 'in' ? 0.1 : -0.1)) * 10) / 10;
+  store.saveSettings({ ...settings, ui_zoom: getWindowScale(next) });
+}
+module.exports = { fitWindowBounds, getWindowScale, saveWindowZoom };

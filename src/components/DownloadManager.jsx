@@ -687,6 +687,7 @@ function DownloadManager({ onNavigate, active = true }) {
                     )}
                     {task.status === 'failed' && task.error && <span className="dm-error">{task.error}</span>}
                   </div>
+                  {['downloading', 'completed'].includes(task.status) && task.qualityNotice && <div className="dm-quality-notice">{task.qualityNotice}</div>}
                   {(task.status === 'downloading' || task.status === 'pending') && (
                     <div className="dm-progress">
                       <div className="dm-progress-bar">

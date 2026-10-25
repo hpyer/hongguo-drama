@@ -51,7 +51,7 @@ const checks = [
   ['Windows main close requests normal quit even when a hidden search window survives', async () => {
     const h = fixture('win32');
     h.context.createWindow();
-    assert.equal(h.windows[0].zoomFactor, 1100 / 1200, 'main window initializes landscape scaling');
+    assert.equal(h.windows[0].zoomFactor, 1, 'main window initializes default font size');
     h.context.getSearchWindow(true);
     let prevented = false;
     h.windows[0].emit('close', { preventDefault: () => prevented = true });

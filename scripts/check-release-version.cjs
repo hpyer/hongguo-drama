@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { availableRelease } = require('../src/native/app-update');
 
-const ordered = ['1.7', '1.8', '1.9', '1.71', '1.74', '1.75', '1.75.1', '1.76', '1.99', '1.100', '2.0', '2.9', '3.0', '3.1', '3.2'];
+const ordered = ['1.7', '1.8', '1.9', '1.71', '1.74', '1.75', '1.75.1', '1.76', '1.99', '1.100', '2.0', '2.9', '3.0', '3.1', '3.2', '3.3'];
 let checks = 0;
 for (let current = 0; current < ordered.length; current++) {
   for (let next = 0; next < ordered.length; next++) {
@@ -32,6 +32,8 @@ assert.equal(availableRelease({ tag_name: 'v3.1' }, '3.0.0').version, '3.1');
 assert.equal(availableRelease({ tag_name: 'v3.1' }, '3.1.0'), null);
 assert.equal(availableRelease({ tag_name: 'v3.2' }, '3.1.0').version, '3.2');
 assert.equal(availableRelease({ tag_name: 'v3.2' }, '3.2.0'), null);
+assert.equal(availableRelease({ tag_name: 'v3.3' }, '3.2.0').version, '3.3');
+assert.equal(availableRelease({ tag_name: 'v3.3' }, '3.3.0'), null);
 for (const artifact of [pkg.build.artifactName, pkg.build.portable.artifactName, pkg.build.nsis.artifactName]) {
   assert(artifact.includes(`-${publicVersion}-`), 'Download filenames must contain the two-part release version');
   assert(!artifact.includes('${version}'), 'Raw internal versions must not leak into download filenames');

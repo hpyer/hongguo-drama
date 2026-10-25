@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 3.2 下载器（独立版）主进程
+ * main.js - 红果短剧 3.3 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -33,7 +33,7 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const store = require('./src/store');
 const watchHistory = require('./src/native/watch-history');
 const seriesSearch = require('./src/native/series-search');
-const { fitWindowBounds, getWindowScale } = require('./src/native/window-layout');
+const { fitWindowBounds, getWindowScale, saveWindowZoom } = require('./src/native/window-layout');
 const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
 const { fetchPublicDetails } = require('./src/native/public-details');
@@ -457,6 +457,7 @@ function loadDownloadTasks() {
       ...task,
       status: inProgress ? 'failed' : task.status,
       error: inProgress ? '应用关闭时任务中断' : task.error,
+      qualityNotice: task.status === 'completed' ? task.qualityNotice || '' : '',
     };
   });
 }
@@ -769,7 +770,8 @@ async function executeDownload(task) {
 async function verifyDownloadQuality(file, quality, existing = false) {
   quality = normalizeDownloadQuality(quality);
   const ffprobe = resolveFfmpeg('ffprobe');
-  const info = ffprobe ? await probeVideoInfo(ffprobe, file) : null;
+  if (!ffprobe) throw Object.assign(new Error('视频检查工具不可用，请修复安装后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR' });
+  const info = await probeVideoInfo(ffprobe, file, undefined, true);
   const prefix = existing ? '已有本地文件' : '片源文件';
   if (!info || ![info.w, info.h, info.duration].every(value => Number.isFinite(value) && value > 0)) {
     throw new Error(`${prefix}缺少有效视频轨、分辨率或时长，未完成下载${existing ? '；文件已保留，请先自行检查或移除' : ''}`);
@@ -794,10 +796,24 @@ async function executeHongguoDownload(task) {
   let tmpPath, writer;
   try {
     task.status = 'downloading'; task.cancelled = false; task.progress = 0; delete task.retryAt;
-    sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
+    delete task.qualityNotice; delete task.actualQuality;
+    sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0, qualityNotice: '', actualQuality: null });
     const settings = getCurrentSettings();
     // Old and retried tasks retain their original policy, independent of new defaults.
     const quality = normalizeDownloadQuality(task.downloadQuality);
+    const allowLowerQuality = quality !== 'auto' && /^\d{1,30}$/.test(String(vid));
+    const notifyQuality = pixels => {
+      const lower = allowLowerQuality && pixels > 0 && pixels < Number.parseInt(quality, 10);
+      const notice = lower ? `正在下载更低质量片源：${pixels}P（原选 ${quality.toUpperCase()}）` : '';
+      if (task.qualityNotice === notice) return;
+      task.qualityNotice = notice;
+      sendToRenderer('download-progress', { id, qualityNotice: notice });
+    };
+    const verifyReceived = async file => {
+      const actual = await verifyDownloadQuality(file, allowLowerQuality ? 'auto' : quality);
+      notifyQuality(Number.parseInt(actual, 10));
+      return actual;
+    };
     const root = String(settings.root || '').trim() || app.getPath('downloads');
     const downloadDir = task.customDir || seriesDownloadDir(root, hongguoInfo?.series_id, series_title);
     fs.mkdirSync(downloadDir, { recursive: true });
@@ -840,11 +856,14 @@ async function executeHongguoDownload(task) {
         cached.lastUsed = Date.now();
       }
     }
-    if (!reusedCache) await withMediaRecovery(vid, hongguoInfo?.series_id, { playInfo: checkedPlayInfo, quality, force: true, cancelToken: source.token }, async playInfo => {
+    if (!reusedCache) await withMediaRecovery(vid, hongguoInfo?.series_id, { playInfo: checkedPlayInfo, quality, allowLowerQuality, force: true, cancelToken: source.token }, async playInfo => {
       source.token.throwIfRequested();
+      notifyQuality(Math.min(Number(playInfo.width), Number(playInfo.height)));
+      task.progress = 0; task.receivedBytes = 0; task.totalBytes = 0;
+      sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
       if (playInfo.format === 'hls') {
         await prepareHlsFile(playInfo,tmpPath,{cancelToken:source.token,onProgress:received => { task.receivedBytes = received; sendToRenderer('download-progress',{id,progress:0,receivedBytes:received,totalBytes:0}); }});
-        task.actualQuality = await verifyDownloadQuality(tmpPath,quality);
+        task.actualQuality = await verifyReceived(tmpPath);
         source.token.throwIfRequested(); checkCustomAccess(vid);
         publishDownloadFile(tmpPath,finalPath);
         return;
@@ -871,7 +890,7 @@ async function executeHongguoDownload(task) {
         const decodedPath = tmpPath + '.decoded';
         try {
           await decryptContentKeyFile(tmpPath, decodedPath, playInfo.contentKey, { cancelToken: source.token });
-          task.actualQuality = await verifyDownloadQuality(decodedPath, quality);
+          task.actualQuality = await verifyReceived(decodedPath);
           source.token.throwIfRequested();
           publishDownloadFile(decodedPath, finalPath);
         } finally { try { fs.unlinkSync(decodedPath); } catch (_) {} }
@@ -883,28 +902,30 @@ async function executeHongguoDownload(task) {
         const decodedPath = tmpPath + '.decoded';
         try {
           await decryptInWorker({ srcPath: tmpPath, dstPath: decodedPath, key }, { cancelToken: source.token });
-          task.actualQuality = await verifyDownloadQuality(decodedPath, quality);
+          task.actualQuality = await verifyReceived(decodedPath);
           source.token.throwIfRequested();
           publishDownloadFile(decodedPath, finalPath);
         }
         finally { try { fs.unlinkSync(decodedPath); } catch (_) {} }
         fs.unlinkSync(tmpPath);
       } else {
-        task.actualQuality = await verifyDownloadQuality(tmpPath, quality);
+        task.actualQuality = await verifyReceived(tmpPath);
         source.token.throwIfRequested();
         publishDownloadFile(tmpPath, finalPath);
       }
     });
     task.status = 'completed'; task.progress = 100; task.endTime = Date.now(); delete task.sourceRetries;
-    saveDownloadTasks(); sendToRenderer('download-completed', { id, path: finalPath });
+    if (task.qualityNotice) task.qualityNotice = task.qualityNotice.replace('正在下载', '已下载');
+    saveDownloadTasks(); sendToRenderer('download-completed', { id, path: finalPath, actualQuality: task.actualQuality, qualityNotice: task.qualityNotice || '' });
   } catch (error) {
     if (writer && !writer.destroyed) writer.destroy();
     if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
+    task.qualityNotice = '';
     // A retry may already be queued; the cancelled old run must not overwrite it.
     if (source.token.reason || axios.isCancel(error) || task.cancelled) {
       if (task.status !== 'pending') {
         task.status = 'stopped'; task.error = ''; task.endTime = Date.now();
-        sendToRenderer('download-stopped', { id });
+        sendToRenderer('download-stopped', { id, qualityNotice: '' });
       }
     } else {
       const retries = task.sourceRetries || 0;
@@ -918,7 +939,7 @@ async function executeHongguoDownload(task) {
         task.error = `${error.message} 将在 ${wait}后自动重试（${retries + 1}/${SOURCE_RETRY_DELAYS.length}）。`;
         armSourceRetry(task);
       }
-      sendToRenderer('download-failed', { id, error: task.error, retryAt: task.retryAt || null, sourceRetries: task.sourceRetries || 0 });
+      sendToRenderer('download-failed', { id, error: task.error, retryAt: task.retryAt || null, sourceRetries: task.sourceRetries || 0, qualityNotice: '' });
     }
     saveDownloadTasks();
   } finally {
@@ -1521,14 +1542,19 @@ function probeDuration(ffprobePath, file, task) {
   });
 }
 
-function probeVideoInfo(ffprobePath, file, task) {
-  return new Promise((resolve) => {
+function probeVideoInfo(ffprobePath, file, task, rejectToolErrors = false) {
+  return new Promise((resolve, reject) => {
     const { execFile } = require('child_process');
     const child = execFile(ffprobePath, ['-v', 'error', '-show_data_hash', 'sha256',
       '-show_entries', 'stream=codec_type,codec_name,codec_tag_string,profile,level,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,time_base,extradata_hash,sample_rate,channels,channel_layout,bit_rate,color_range,color_space,color_transfer,color_primaries,field_order:format=duration,bit_rate,size', '-of', 'json', file],
       { timeout: 30000 }, (err, stdout) => {
         if (task?.child === child) delete task.child;
-        if (err) return resolve(null);
+        if (err) {
+          if (rejectToolErrors && (typeof err.code === 'string' || err.killed)) {
+            return reject(Object.assign(new Error('视频检查工具无法运行，请检查安装与权限后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR', cause: err }));
+          }
+          return resolve(null);
+        }
         try { resolve(require('./src/native/merge-plan').readMergeInfo(JSON.parse(stdout))); }
         catch (_) { resolve(null); }
       });
@@ -2128,7 +2154,7 @@ async function withMediaRecovery(vid, seriesId, options, consume) {
       let info;
       try {
         info = !round && options.playInfo || await awaitMediaOperation(hongguo.fetchPlayUrlSingle(vid, seriesId,
-          { quality: options.quality, force: options.force || round > 0 }), controller.signal, 30000);
+          { quality: options.quality, allowLowerQuality: options.allowLowerQuality, force: options.force || round > 0 }), controller.signal, 30000);
       } catch (error) {
         cancelled();
         if (!recoverable(error)) throw error;
@@ -2154,10 +2180,13 @@ async function withMediaRecovery(vid, seriesId, options, consume) {
           return value;
         } catch (error) {
           cancelled();
-          if (!recoverable(error)) throw error;
+          // Local storage/security failures cannot be repaired by trying a lower-quality video.
+          const terminal = error?.path || error?.dest
+            || /^(?:EACCES|EPERM|ENOSPC|EDQUOT|EROFS|EIO|ENOENT|EEXIST|ENOTDIR|EISDIR|EMFILE|ENFILE|EBUSY|ENAMETOOLONG|EMLINK|EFBIG|LOCAL_MEDIA_TOOL_ERROR|SECURITY_BLOCKED|ERR_WEB_MEDIA_ADDRESS)$/.test(error?.code);
+          if (options.allowLowerQuality && terminal || (!recoverable(error) && !options.allowLowerQuality)) throw error;
           lastError = error;
           hongguo.markWebMediaFailure?.(candidate);
-          if (transfers >= 4) throw lastError;
+          if (transfers >= 4 && !options.allowLowerQuality) throw lastError;
         }
       }
     }
@@ -3353,9 +3382,9 @@ ipcMain.handle('get-download-tasks', () => {
   return sorted.map((task) => {
     const { cancelSource, writer, ...serializableTask } = task;
     if (task.status === 'completed' && !hasCompleteTaskFile(task)) {
-      return { ...serializableTask, status: 'failed', progress: 0, error: '本地文件已丢失或路径冲突，请重新下载' };
+      return { ...serializableTask, status: 'failed', progress: 0, qualityNotice: '', error: '本地文件已丢失或路径冲突，请重新下载' };
     }
-    return serializableTask;
+    return { ...serializableTask, qualityNotice: ['downloading', 'completed'].includes(task.status) ? task.qualityNotice || '' : '' };
   });
 });
 
@@ -3877,8 +3906,17 @@ let layoutChanging = false;
 const stealth = createStealthController({ screen, getWindow: () => mainWindow });
 function syncMainWindowScale() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const scale = getWindowScale(windowLayout, mainWindow.getContentSize()[0], stealth.enabled);
+  const scale = getWindowScale(getCurrentSettings().ui_zoom);
   mainWindow.webContents.setZoomFactor(scale);
+}
+function changeMainWindowZoom(direction) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    saveWindowZoom(store, direction);
+    syncMainWindowScale();
+  } catch (_) {
+    sendToRenderer('storage-error', { error: '界面大小保存失败，请检查磁盘空间或目录权限后重试。' });
+  }
 }
 ipcMain.handle('set-stealth-mode', async (event, enabled) => {
   if (!mainWindow || event.sender !== mainWindow.webContents || typeof enabled !== 'boolean') return { success: false, error: '无法切换小窗' };
@@ -3944,6 +3982,7 @@ function createWindow() {
     backgroundColor: '#f5f6fa',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      zoomMode: 'isolated',
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -3955,6 +3994,7 @@ function createWindow() {
   mainWindow.on('enter-full-screen', syncMainWindowScale);
   mainWindow.on('leave-full-screen', syncMainWindowScale);
   mainWindow.webContents.on('did-finish-load', syncMainWindowScale);
+  mainWindow.webContents.on('zoom-changed', (_event, direction) => changeMainWindowZoom(direction));
   syncMainWindowScale();
   rendererSecurity.protectWindow(mainWindow);
   episodePanel.attach(mainWindow);
@@ -4061,8 +4101,9 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
           { role: 'paste', label: '粘贴' }, { role: 'selectAll', label: '全选' },
         ] },
         { label: '视图', submenu: [
-          { role: 'resetZoom', label: '实际大小' },
-          { role: 'zoomIn', label: '放大' }, { role: 'zoomOut', label: '缩小' },
+          { label: '实际大小', accelerator: 'CmdOrCtrl+0', click: () => changeMainWindowZoom('reset') },
+          { label: '放大', accelerator: 'CmdOrCtrl+Plus', click: () => changeMainWindowZoom('in') },
+          { label: '缩小', accelerator: 'CmdOrCtrl+-', click: () => changeMainWindowZoom('out') },
           { type: 'separator' }, { role: 'togglefullscreen', label: '全屏' },
         ] },
         { label: '窗口', submenu: [

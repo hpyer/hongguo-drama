@@ -37,19 +37,19 @@ const failures = [];
 async function check(name, fn) { try { await fn(); } catch (error) { failures.push(`${name}: ${error.message}`); } }
 (async () => {
   await check('window scaling follows native events and layout IPC', async () => {
-    assert.equal(win.zoomFactor, 1100 / 1200);
+    assert.equal(win.zoomFactor, 1);
     for (const name of ['resize', 'enter-full-screen', 'leave-full-screen', 'did-finish-load']) {
       win.bounds.width = 1470;
       win.zoomFactor = 2;
       (name === 'did-finish-load' ? win.webContents : win).emit(name);
-      assert.equal(win.zoomFactor, 1470 / 1200, name);
+      assert.equal(win.zoomFactor, 1, name);
     }
     assert.equal((await handlers['set-window-layout'](event, 'portrait')).success, true);
-    assert.equal(win.zoomFactor, 1, 'portrait layout resets landscape zoom');
+    assert.equal(win.zoomFactor, 1, 'portrait preserves font size');
     win.emit('resize');
     assert.equal(win.zoomFactor, 1, 'portrait resize keeps original scale');
     assert.equal((await handlers['set-window-layout'](event, 'landscape')).success, true);
-    assert.equal(win.zoomFactor, 1470 / 1200, 'landscape restores the previous width and proportional scale');
+    assert.equal(win.zoomFactor, 1, 'landscape restores bounds without changing font size');
   });
   await check('sandbox enabled', () => assert.equal(win.options.webPreferences.sandbox, true));
   await check('trusted page can invoke IPC', async () => assert.equal((await handlers['get-app-info'](event)).version, 'test'));
