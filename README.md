@@ -23,20 +23,18 @@
 
 ## 下载与安装
 
-**当前源码候选：3.4**。本轮搜索、便携资料与播放器改动及验收边界见 [3.4 说明](docs/release-3.4.md)。正式发行完成前，以下下载入口仍指向 3.3。
+**当前正式版：3.4**。三端发行资产已公开并核对远端摘要，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.3](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
-**当前正式版：3.3**。三端发行资产已公开，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.2](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
-
-| 设备 | 下载 3.3 | 安装方式 |
+| 设备 | 下载 3.4 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/Hongguo-3.3-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/Hongguo-3.3-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/Hongguo-3.4-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/Hongguo-3.4-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/hongguo-downloader-3.4-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/hongguo-downloader-3.4-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/hongguo-downloader-3.4-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.3 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.4 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.4) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.4/SHA256SUMS.txt)
 
-- **首次升级到 3.3**：1.75 及更早版本仍需手动下载一次；退出旧应用后替换 Mac 程序，或运行 Windows 安装包。原有用户资料位置不变，请保留资料目录和下载文件。
+- **升级到 3.4**：1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
@@ -50,6 +48,10 @@
 2. 在「发现短剧」浏览，或在「搜索与下载」输入剧名、红果分享链接或剧集 ID。
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
+
+## 3.4 搜索与资料安全
+
+官网搜索支持补搜和加载更多；Windows 便携资料跟随程序，播放器新增全屏时间与分辨率信息。App 搜索为默认关闭的实验选项。修复内容及验收边界见 [3.4 说明](docs/release-3.4.md)。
 
 ## 3.3 下载降级与 Mac 界面缩放
 

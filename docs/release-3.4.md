@@ -1,6 +1,6 @@
-# 红果短剧 3.4（发行候选）
+# 红果短剧 3.4
 
-内部版本 3.4.0，基于 3.3 正式版。本文记录源码改动与本地验证边界；三端安装包、签名、公证、应用内更新清单须在正式发行会话生成并回读，本文不代表已发布。
+3.4（内部 `3.4.0`）已于 2026-10-26 正式发布，标签 `v3.4`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac 应用及 DMG 已完成 Developer ID 签名、Apple 公证和装订，Windows EXE 未签名。冻结源码 `241ada2d604ce65dc15d3c4df3686716ece61865`；后续文档提交不改变标签和已发布包。 Windows [本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40207906101) 的便携播放、新装、重装、1.80 升级与资料保留通过；Mac 冻结源码的随机两集下载、播放、定位、全屏及切集已检查，最终签名包完成 arm64 原生和 x64 Rosetta 隔离启动/退出。未覆盖实体 Intel/Windows、干净 Gatekeeper、长期播放、完整应用内跨版本更新；音轨解码不等于人工听感确认。
 
 ## 复核后的补充修复
 
@@ -72,4 +72,8 @@
 - 新增离线检查：`src/native/hongguo-search.test.cjs`（解析、去重、重试、缓存、错误分类、无法识别的非空列表、空响应与错误码）、`src/components/__tests__/search-ranking.test.mjs`（标点与部分匹配）、`src/components/__tests__/player-display.test.mjs`（时钟与分辨率文案）、`scripts/check-portable-data.cjs`（迁移、覆盖保护、只读回退、迁移失败回滚、未完成迁移标记恢复/回退、单实例锁顺序）、`scripts/check-sequel-finder-ui.cjs`（挂起查询超时、重试计时器隔离）、`scripts/check-hongguo-search-ipc.cjs`（接口优先、结构变化兜底、超时不等待页面、模糊补搜、补搜失败上报）、`scripts/check-share-security.cjs`（URL/分享文本直接取编号，不联网）、`src/components/check-ui-state.cjs`（搜索超时保留已完成来源）、`scripts/check-search-timeout.cjs`（页面失败不再伪装成空结果）、`scripts/check-player-controls.cjs`（全屏时钟与当前画面）。
 - 本地已通过：上述单元测试、`scripts/check-series-search.cjs`（含真实 IPC 的下一季链路、预算到期跳过补搜）、`scripts/check-watch-history-backend.cjs`、`scripts/check-watch-history-integration.cjs`、`scripts/check-release-version.cjs`、`scripts/check-storage-targets.cjs`、`scripts/check-search-deadline.cjs`、`scripts/check-hongguo-identity.cjs`、`scripts/check-app-search-ipc.cjs`、`src/native/hongguo-app-search.test.cjs`、`src/components/__tests__/random-drama.test.mjs`、`npm run build:react`。R01/R02/R04/R07/R11 的负例、R06 的剩余预算、R12 的错配拒绝和 HLS 容量/跨块 UTF-8 均已有独立检查；HLS 真实转封装用本机 FFmpeg 夹具运行。
 - 真实站点（2026-10-25）：应用内搜索模块返回正确剧名、集数与封面；用「言出法随，诸天万界我说了算」执行续作查询约 3.2 秒返回「第二季」，未再出现超时。
-- 未覆盖：Electron 真实窗口的全屏视觉效果、Windows 实体便携版的迁移内容与只读目录、签名/公证/安装包/自动更新；需正式发行会话补充。Windows CI 新增一次不带 `--user-data-dir` 的便携启动，连接渲染进程检查 `configMode=portable` 与程序目录 `dataDir`，并保存一项设置确认写进程序旁 `data/data.json`；迁移内容仍由单元测试覆盖，尚未在实体 Windows 实机验收。接口非公开，长期稳定性仍需观察。便携版的 `data` 同时承载 Chromium 会话数据（搜索历史、缓存、Cookies），分享或备份该目录前请留意；单实例锁在切换 userData 之前取得，安装版与便携版不能同时运行，迁移也不会被同一程序的并发启动打断。
+- 剩余边界：实体 Windows 的迁移内容与只读目录、实体 Intel、干净 Gatekeeper、完整应用内更新、长期播放和人工听感仍未覆盖。Windows CI 已实际完成不带 `--user-data-dir` 的便携启动、路径及保存验证。便携 `data` 含浏览器会话数据，备份或分享时注意隐私。
+
+## 正式发行验收
+
+Windows [本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40207906101) 的便携播放、新装、重装、1.80 升级与资料保留通过；Mac 冻结源码的随机两集下载、播放、定位、全屏及切集已检查，最终签名包完成 arm64 原生和 x64 Rosetta 隔离启动/退出。未覆盖实体 Intel/Windows、干净 Gatekeeper、长期播放、完整应用内跨版本更新；音轨解码不等于人工听感确认。 官网真实请求仍观察到偶发超时或空响应，界面已保留结果并提示。评论者原始失败短链未提供；App 搜索继续保持实验、默认关闭。源码 CI [40207829126](https://github.com/jackotom/hongguo-drama/actions/runs/40207829126) 与 Windows CI 绑定同一冻结提交。
