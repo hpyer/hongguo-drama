@@ -23,18 +23,18 @@
 
 ## 下载与安装
 
-**当前正式版：3.2**。三端发行资产已公开，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.1](https://github.com/jackotom/hongguo-drama/releases/tag/v3.1)。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前正式版：3.3**。三端发行资产已公开，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.2](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。按你的设备选择一个文件即可，媒体工具已内置，无需另装 Node.js、Homebrew 或 FFmpeg。
 
-| 设备 | 下载 3.2 | 安装方式 |
+| 设备 | 下载 3.3 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/Hongguo-3.2-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/Hongguo-3.2-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/hongguo-downloader-3.2-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/hongguo-downloader-3.2-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/hongguo-downloader-3.2-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/Hongguo-3.3-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/Hongguo-3.3-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/hongguo-downloader-3.3-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.2 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.2/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.3 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.3/SHA256SUMS.txt)
 
-- **首次升级到 3.2**：1.75 及更早版本仍需手动下载一次；退出旧应用后替换 Mac 程序，或运行 Windows 安装包。原有用户资料位置不变，请保留资料目录和下载文件。
+- **首次升级到 3.3**：1.75 及更早版本仍需手动下载一次；退出旧应用后替换 Mac 程序，或运行 Windows 安装包。原有用户资料位置不变，请保留资料目录和下载文件。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件，两种版本沿用原用户资料目录。
@@ -49,12 +49,12 @@
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
 
-## 3.3 下载降级与 Mac 界面缩放（发行目标）
+## 3.3 下载降级与 Mac 界面缩放
 
 - 红果指定清晰度不可用或下载失败时，自动尝试更低清晰度；下载管理显示降级提示和实际下载画质。
 - 已有文件保留；取消、磁盘权限和本地媒体工具错误不会触发降级，不改变第三方来源的策略。
 - Mac 的「视图」放大、缩小和实际大小会保存选择，调整窗口、切换横竖布局或重新启动后继续生效。
-- 本轮源码／发行目标为 3.3；当前正式下载仍为 3.2。构建、签名、公证与真实媒体验收状态见 [3.3 说明](docs/release-3.3.md)。
+- 3.3 三端发行已完成；字号只随手动缩放调整，拖动窗口不改变字号。构建、公证与真实媒体验收边界见 [3.3 说明](docs/release-3.3.md)。
 
 ## 3.2 片单缓存与刷新恢复
 
@@ -302,7 +302,7 @@
 
 ### 5. 下载队列：批量保存与失败恢复
 
-- **下载清晰度**：自动（兼容优先）、1080P、720P，可保存默认值。按视频实际尺寸选源，保存前再次检查。3.3 源码对红果片源新增自动降级：所选画质不可用或下载失败时尝试更低清晰度，并显示提示；3.2 正式版仍保持原画质要求。不会放大冒充高清；只有更高分辨率时保留原分辨率，不降采样。
+- **下载清晰度**：自动（兼容优先）、1080P、720P，可保存默认值。按视频实际尺寸选源，保存前再次检查。红果片源所选画质不可用或下载失败时尝试更低清晰度，并显示提示。不会放大冒充高清；只有更高分辨率时保留原分辨率，不降采样。
 - **任务独立保存选择**：修改默认清晰度不改变已有任务的普通重试；已有低清文件保留，不自动覆盖。清晰度选项仅影响下载，不改变在线播放策略。
 - 单集或批量加入队列，显示等待中、下载中、已完成、失败、已停止状态，以及下载进度、已接收 / 总字节数和失败原因。
 - 支持全部开始、全部暂停、单任务停止、重试失败、选中失败项及重试选中；停止的任务可重新排队。
@@ -428,17 +428,17 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-源码／发行目标为 **3.3**（内部 3.3.0），尚未发布；改动和待验项目见 [3.3 说明](docs/release-3.3.md)。
+当前正式版为 **3.3**（内部 3.3.0），下载降级与 Mac 界面缩放的改动及验收边界见 [3.3 说明](docs/release-3.3.md)。
 
-当前正式版为 **3.2**，片单缓存、刷新恢复与验证范围见 [3.2 说明](docs/release-3.2.md)。
+3.3 安装包、对应源码与校验文件见 [3.3 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3)。三端 16 项资产已公开并核对远端 SHA256；双 Mac 应用与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订；Windows CI 安装、重装、跨版本升级与便携媒体检查通过，EXE 未签名。 Windows 构建记录：[本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40156845982)。
 
-3.2 安装包、对应源码与校验文件见 [3.2 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。上一正式版变更保留于 [3.1 说明](docs/release-3.1.md)。
+冻结源码 `1f152862ac9bc23f0a2ad2340a32ad7a62a4aaec`；后续文档提交不改变 v3.3 标签及已发布安装包、更新包和对应源码包的字节。 源码候选随机真实两集下载与播放、快进／回退、全屏、切集及受控 720P 降级通过，用户确认声音正常。最终已签名 arm64 包隔离启动、90% 缩放、恢复 100% 与正常退出通过；未在最终包重复真实播放。
 
-冻结源码 `fe110c68f9e2a1eceb059be222901d2d37926a5d`；后续文档提交不改变 v3.2 标签及已发布安装包、更新包和对应源码包的字节。 本轮未覆盖本机正式安装；实际验收范围和限制见本版发行说明。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替 3.2 验收，也不代表实体电脑完整覆盖。
+上一正式版 **3.2** 的片单缓存、刷新恢复与验证记录保留于 [3.2 说明](docs/release-3.2.md) 和 [3.2 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.2)。其冻结源码 `fe110c68f9e2a1eceb059be222901d2d37926a5d` 及已发布资产保持不变；3.2 未覆盖本机正式安装，更早变更见 [3.1 说明](docs/release-3.1.md)。此前 2.1 已有 Mac 隔离启动、更新下载与合成版本原生重启，以及 Windows CI 的新装、重装和真实 1.80 覆盖升级记录；这些历史结果不代替 3.2 或 3.3 验收，也不代表实体电脑完整覆盖。
 
 本版不宣称修复批量下载黑屏或闪退反馈；相关问题仍需要对应设备与复现场景核实。
 
-**尚未覆盖**：实体 Windows 11、全部显卡、实体 Intel Mac、启用 Gatekeeper 的干净环境、Windows 真实网络弹幕及长期播放。云端检查和公证不能代替所有设备与网络环境的实测。
+**尚未覆盖**：实体 Intel Mac、实体 Windows、启用 Gatekeeper 的干净系统、完整应用内更新流程及长期播放；没有覆盖本机正式安装。 也未覆盖全部显卡与 Windows 真实网络弹幕；云端检查和公证不能代替所有设备与网络环境的实测。
 
 <details>
 <summary>历史版本与旧版升级提示</summary>
