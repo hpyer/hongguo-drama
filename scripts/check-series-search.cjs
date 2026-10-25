@@ -82,6 +82,14 @@ function searchModule() { assert.ok(fs.existsSync(file), 'bounded search module 
     assert.deepEqual(calls, ['双子房客', '双子房客第三季', '双子房客第3季']);
     assert.deepEqual(result.results.map(item => item.series_id), [third.series_id, fourth.series_id]);
   });
+  await check('an expired total budget skips supplements but keeps the primary results', async () => {
+    const calls = [];
+    const result = await searchModule().searchSeries('双子房客', async kw => { calls.push(kw); return ok([first]); }, [], { deadline: Date.now() - 1 });
+    assert.deepEqual(calls, ['双子房客']);
+    assert.equal(result.success, true);
+    assert.equal(result.partial, true);
+    assert.match(result.error, /时间预算/);
+  });
   await check('missing or unsupported identities never trigger remote searches', async () => {
     const { findSeriesSequels } = searchModule(); let calls = 0;
     for (const series of [{ ...first, series_title: '' }, { ...first, series_title: '第三季' }, { ...first, series_title: '双子房客第999999999999999999999季' }, { series_id: 'unknown:1', series_title: '双子房客' }]) {
@@ -92,7 +100,7 @@ function searchModule() { assert.ok(fs.existsSync(file), 'bounded search module 
   });
   await check('merged UI results rank exact and contained titles, dedupe within source and retain other sources', () => {
     const module = { exports: {} };
-    const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/SearchPanel.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
+    const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/searchRanking.mjs'), 'utf8'), { loader: 'js', format: 'cjs' }).code;
     vm.runInNewContext(source, { module, exports: module.exports, require: () => ({}) });
     assert.equal(typeof module.exports.rankSearchResults, 'function');
     const result = module.exports.rankSearchResults([

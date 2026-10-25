@@ -6,13 +6,13 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const { transformSync } = require('esbuild');
 
-function mount(overrides = {}) {
+function mount(overrides = {}, propOverrides = {}) {
   const file = path.join(__dirname, '../src/components/SequelFinder.jsx');
   assert.ok(fs.existsSync(file), 'SequelFinder must provide the manual next-season entry');
   const source = transformSync(fs.readFileSync(file, 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const slots = [], effects = [], cleanups = [], calls = [];
   let cursor = 0, tree;
-  const props = { seriesId: 'A', active: true };
+  const props = { seriesId: 'A', active: true, ...propOverrides };
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
     useState: initial => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], value => { slots[i] = typeof value === 'function' ? value(slots[i]) : value; }]; },
@@ -26,7 +26,7 @@ function mount(overrides = {}) {
     ...overrides,
   };
   const module = { exports: {} };
-  vm.runInNewContext(source, { module, exports: module.exports, require: name => name === 'react' ? react : {}, window: { electronAPI: api } });
+  vm.runInNewContext(source, { module, exports: module.exports, require: name => name === 'react' ? react : {}, window: { electronAPI: api }, setTimeout, clearTimeout });
   const render = () => { cursor = 0; tree = module.exports.default(props); effects.splice(0).forEach(fn => fn()); };
   const find = predicate => { const visit = node => { if (!node || typeof node !== 'object') return; if (predicate(node)) return node; return node.children?.map(visit).find(Boolean); }; return visit(tree); };
   const text = node => typeof node === 'string' || typeof node === 'number' ? String(node) : node?.children?.map(text).join('') || '';
@@ -139,4 +139,45 @@ test('Player exposes the finder for its current series and passes page activity'
 test('successful empty query reports no result without claiming query failure', async () => {
   const ui = mount({ findSeriesSequels: async () => ({ success: true, results: [] }) });
   await ui.query(); assert.match(ui.text(), /暂未找到/); assert.doesNotMatch(ui.text(), /查询未完成/);
+});
+
+test('a late first query cannot clear the retry timeout', async () => {
+  const firstRemote = deferred(), secondRemote = deferred();
+  let remote = 0;
+  const ui = mount({
+    findSeriesSequels: (id, options) => options?.localOnly
+      ? Promise.resolve({ success: true, results: [] })
+      : (++remote === 1 ? firstRemote.promise : secondRemote.promise),
+  }, { timeoutMs: 15 });
+  await ui.flush();
+  ui.button('查找下一季').props.onClick();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await ui.flush();
+  assert.match(ui.text(), /查询超时/);
+
+  ui.button('重试').props.onClick();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  // 旧请求晚到：只允许它结束自己，不能清掉第二次查询的计时器。
+  firstRemote.resolve({ success: true, results: [] });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await ui.flush();
+  assert.match(ui.text(), /查询超时/, 'retry must keep its own watchdog');
+  assert.doesNotMatch(ui.text(), /正在查找下一季/);
+  secondRemote.resolve({ success: true, results: [] });
+  await ui.flush();
+});
+
+test('a hanging query times out with retry instead of spinning forever', async () => {
+  const pending = deferred();
+  const ui = mount({ findSeriesSequels: () => pending.promise }, { timeoutMs: 15 });
+  await ui.flush();
+  ui.button('查找下一季').props.onClick();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await ui.flush();
+  assert.match(ui.text(), /查询超时/);
+  assert.ok(ui.button('重试'));
+  ui.api.findSeriesSequels = async () => ({ success: true, results: [] });
+  await ui.button('重试').props.onClick();
+  await ui.flush();
+  assert.doesNotMatch(ui.text(), /查询超时/);
 });

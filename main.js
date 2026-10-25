@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 3.3 下载器（独立版）主进程
+ * main.js - 红果短剧 3.4 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -20,6 +20,22 @@ if (IS_PREVIEW) {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 else app.on('second-instance', () => app.emit('activate'));
+// Windows 便携版：资料跟随程序目录，移动程序时一起带走。
+// 迁移必须发生在取得单实例锁之后，避免同一便携目录的两个进程互相清理临时文件。
+const { applyPortableDataDir, getPortableDirectory } = require('./src/native/portable-data');
+let portableConfig = { mode: 'default', dir: '', reason: '', copied: [],
+  portableDir: getPortableDirectory({ env: process.env, platform: process.platform, execPath: process.execPath }) };
+if (hasSingleInstanceLock && !IS_PREVIEW && app.commandLine.hasSwitch?.('user-data-dir') !== true) {
+  try {
+    // 浏览器会话数据也跟随程序目录；applyPortableDataDir 同时设置
+    // userData 与 sessionData，失败时把原因留在 portableConfig.reason。
+    portableConfig = applyPortableDataDir({ app, defaultUserData: app.getPath('userData'), execPath: process.execPath });
+    if (portableConfig.copied?.length) console.log('[Config] 已迁移便携版资料:', portableConfig.copied.join(', '));
+    if (portableConfig.reason) console.warn('[Config]', portableConfig.reason);
+  } catch (error) {
+    console.warn('[Config] 便携版资料目录不可用:', error.message);
+  }
+}
 const fs = require('fs');
 const fsp = require('fs/promises');
 const axios = require('axios');
@@ -33,6 +49,7 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const store = require('./src/store');
 const watchHistory = require('./src/native/watch-history');
 const seriesSearch = require('./src/native/series-search');
+const { searchHongguo } = require('./src/native/hongguo-search');
 const { fitWindowBounds, getWindowScale, saveWindowZoom } = require('./src/native/window-layout');
 const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
@@ -116,6 +133,13 @@ protocol.registerSchemesAsPrivileged([
 const onlineCache = new Map();
 const ONLINE_MAX_BYTES = 300 * 1024 * 1024; // 单集整块读取及缓存淘汰预算，不是进程总内存上限
 const onlinePreparing = new Map(); // vid -> shared preparation + abort controller
+const onlineWork = new Set(); // Includes canceled work until its resource cleanup finishes.
+
+function trackOnlineWork(controller, promise) {
+  const job = { controller, promise };
+  onlineWork.add(job);
+  return promise.finally(() => onlineWork.delete(job));
+}
 const onlineSessions = new Map(); // opaque stream ID -> playback lifetime
 
 function onlineCacheTotal() {
@@ -208,6 +232,8 @@ function getDefaultSettings() {
     watch_updates_enabled: true,
     watch_sequels_enabled: true,
     watch_notifications_enabled: false,
+    // 实验：红果 App 搜索优先；失败/空结果自动回退官网 API。
+    search_app_enabled: false,
     // ===== 网络代理 =====
     // proxy_enabled: 是否启用代理（关闭时忽略系统代理，直连）
     // proxy_mode:    system=跟随系统/环境变量 · custom=手动指定 · direct=强制直连
@@ -226,6 +252,8 @@ const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'
 const originalProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.map((key) => [key, process.env[key]]));
 let activeProxyAuth = null;
 const sessionProxyConfigs = new WeakMap();
+let proxyApplyVersion = 0;
+let desiredProxyConfig = null;
 
 // proxy-from-env 2.1.0 没有 env 参数；按相同规则解析启动快照，测试与真实依赖逐例对照。
 function snapshotProxyUrl(targetUrl = 'https://www.baidu.com') {
@@ -360,23 +388,31 @@ function proxyRuleForSession(resolved) {
 }
 
 /** 窗口和更新器使用不同 Session，代理规则必须分别应用。 */
-async function applyProxyToSession(resolved, sessions = [session.defaultSession, appUpdater?.netSession]) {
-  activeProxyAuth = null;
+async function applyProxyToSession(resolved, sessions = [session.defaultSession, appUpdater?.netSession], version = proxyApplyVersion) {
+  let auth = null;
   let config = { mode: resolved.mode === 'direct' ? 'direct' : 'system' };
   if (resolved.mode === 'custom' && resolved.url) {
     const built = proxyRuleForSession(resolved);
     if (!built) throw new Error('代理地址无效');
-    activeProxyAuth = built.auth;
+    auth = built.auth;
     config = { mode: 'fixed_servers', proxyRules: built.rule };
   }
-  const key = JSON.stringify([config, activeProxyAuth]);
+  const key = JSON.stringify([config, auth]);
   await Promise.all(sessions.filter(Boolean).map(async ses => {
-    if (sessionProxyConfigs.get(ses) === key) return;
-    await ses.setProxy(config);
-    await ses.clearAuthCache?.();
-    await ses.closeAllConnections?.();
+    if (sessionProxyConfigs.get(ses) !== key) {
+      await ses.setProxy(config);
+      await ses.clearAuthCache?.();
+      await ses.closeAllConnections?.();
+    }
+    if (version !== proxyApplyVersion) {
+      // Electron cannot cancel setProxy; a late completion must restore the newest choice.
+      sessionProxyConfigs.delete(ses);
+      await applyProxyToSession(desiredProxyConfig, [ses], proxyApplyVersion);
+      throw new Error('代理设置已被更新');
+    }
     sessionProxyConfigs.set(ses, key);
   }));
+  if (version === proxyApplyVersion) activeProxyAuth = auth;
 }
 
 function matchesProxyAuth(authInfo) {
@@ -394,11 +430,52 @@ app.on('login', (event, _webContents, _details, authInfo, callback) => {
 /** 统一入口：设置变化或启动时调用 */
 async function applyProxySettings(settings) {
   const resolved = resolveProxyConfig(settings);
-  try { await applyProxyToSession(resolved); }
+  const version = ++proxyApplyVersion;
+  desiredProxyConfig = resolved;
+  try { await applyProxyToSession(resolved, undefined, version); }
   catch (_) { throw new Error('设置网络代理失败，请重试。'); }
+  if (version !== proxyApplyVersion) throw new Error('代理设置已被更新');
   applyProxyToEnv(resolved);
   console.log(`[Proxy] mode=${resolved.mode}`);
   return resolved;
+}
+
+/** 保存前校验代理草稿，避免坏配置先落盘、下次启动才发现。 */
+function validateProxyDraft(settings) {
+  const s = settings || {};
+  if (s.proxy_enabled !== true) return;
+  const mode = s.proxy_mode || 'system';
+  if (!['system', 'custom', 'direct'].includes(mode)) throw new Error('不支持的代理模式');
+  if (mode !== 'custom') return;
+  const resolved = resolveProxyConfig(s);
+  if (!resolved.url) throw new Error('请填写完整的代理地址与端口');
+  let url;
+  try { url = new URL(resolved.url); } catch (_) { throw new Error('代理地址格式无效'); }
+  if (!['http:', 'https:', 'socks4:', 'socks5:'].includes(url.protocol)) throw new Error('仅支持 HTTP、HTTPS、SOCKS4 或 SOCKS5 代理');
+  if (!url.hostname) throw new Error('代理地址格式无效');
+  if (!proxyRuleForSession(resolved)) throw new Error('代理地址无法用于系统网络设置');
+}
+
+function applyProxyWithTimeout(settings, timeoutMs) {
+  let timer;
+  return Promise.race([
+    applyProxySettings(settings),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('代理启动超时')), timeoutMs); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** 启动时先尝试已保存代理；坏配置临时直连，保证窗口能打开让用户修复。 */
+async function applyProxyForStartup(settings) {
+  try {
+    validateProxyDraft(settings);
+    await applyProxyWithTimeout(settings, 15000);
+    return { fallback: false, reason: '', fallbackError: '' };
+  } catch (error) {
+    let fallbackError = '';
+    try { await applyProxyWithTimeout({ ...settings, proxy_enabled: false, proxy_mode: 'direct' }, 5000); }
+    catch (fallback) { fallbackError = fallback.message; }
+    return { fallback: true, reason: error.message, fallbackError };
+  }
 }
 
 function getCurrentSettings() {
@@ -526,6 +603,26 @@ function saveDownloadTasks() {
     return rest;
   });
   store.saveTasks(serializable);
+  sendToRenderer('download-queue-changed', {});
+}
+
+/** 重试/继续类操作在持久化失败时恢复任务字段与队列，避免未保存的任务随后被启动。 */
+function snapshotQueueTasks(tasks) {
+  return {
+    previousQueue: [...downloadQueue],
+    snapshots: tasks.map(task => ({ task, previous: { ...task } })),
+  };
+}
+
+function restoreQueueTasks(snapshot) {
+  for (const { task, previous } of snapshot.snapshots) {
+    for (const key of Object.keys(task)) if (!(key in previous)) delete task[key];
+    Object.assign(task, previous);
+  }
+  downloadQueue = snapshot.previousQueue;
+  for (const { task } of snapshot.snapshots) {
+    if (task.status === 'failed' && task.retryAt) armSourceRetry(task);
+  }
   sendToRenderer('download-queue-changed', {});
 }
 
@@ -732,9 +829,10 @@ function pauseAllTasks() {
  */
 function resumeAllTasks() {
   let count = 0;
-  for (const task of downloadTasks) {
-    if (task.status !== 'stopped' && task.status !== 'failed' && task.status !== 'pending' && !(task.status === 'completed' && !hasCompleteTaskFile(task))) continue;
-
+  const changed = downloadTasks.filter((task) => task.status === 'stopped' || task.status === 'failed' || task.status === 'pending'
+    || (task.status === 'completed' && !hasCompleteTaskFile(task)));
+  const snapshot = snapshotQueueTasks(changed);
+  for (const task of changed) {
     clearSourceRetry(task);
     repairTaskDestination(task);
     task.status = 'pending';
@@ -750,7 +848,8 @@ function resumeAllTasks() {
     count++;
   }
   if (count > 0) {
-    saveDownloadTasks();
+    try { saveDownloadTasks(); }
+    catch (error) { restoreQueueTasks(snapshot); throw error; }
     pumpQueue();
   }
   sendToRenderer('download-queue-changed', {});
@@ -1123,12 +1222,14 @@ const BROWSE_META_JS = `(() => {
 })()`;
 
 /** 隐藏搜索窗口串行嗅探；整个任务（含加载和读取）共用超时。 */
-async function runSniffOnUrl(url, label) {
+async function runSniffOnUrl(url, label, { deadline = 0 } = {}) {
   // 同一窗口串行执行，避免并发导航互相打断
   const task = async () => {
+    const budget = deadline > 0 ? Math.min(SEARCH_TIMEOUT_MS, deadline - Date.now()) : SEARCH_TIMEOUT_MS;
+    if (budget <= 0) throw new Error('搜索超时，请稍后重试');
     const win = getSearchWindow(true);
     // Reserve the last part of the deadline for empty-page details.
-    const pollDeadline = Date.now() + SEARCH_TIMEOUT_MS * 0.8;
+    const pollDeadline = Date.now() + budget * 0.9;
     let expired = false;
     const timeoutError = new Error('搜索超时，请稍后重试');
     const assertActive = () => {
@@ -1147,7 +1248,7 @@ async function runSniffOnUrl(url, label) {
         expired = true;
         if (!win.isDestroyed()) win.destroy();
         reject(timeoutError);
-      }, SEARCH_TIMEOUT_MS);
+      }, budget);
     });
     const sniff = async () => {
       console.log(`[${label}] 打开:`, url);
@@ -1160,6 +1261,8 @@ async function runSniffOnUrl(url, label) {
       assertActive();
 
       let last = [];
+      const startedAt = Date.now();
+      let reloaded = false;
       while (true) {
         assertActive();
         try {
@@ -1169,7 +1272,22 @@ async function runSniffOnUrl(url, label) {
           assertActive();
           last = [];
         }
-        if (last.length > 0 || Date.now() >= pollDeadline) break;
+        const now = Date.now();
+        if (last.length > 0 || now >= pollDeadline) break;
+        // 站点偶发返回“加载失败，请刷新页面重试”；自动刷新一次比空等超时更有用。
+        if (!reloaded && now - startedAt >= 4000) {
+          let failed = false;
+          try {
+            failed = (await evaluate(`/加载失败|请刷新页面重试/.test(document.body.innerText || '')`)) === true;
+          } catch (_) { failed = false; }
+          if (failed) {
+            reloaded = true;
+            console.log(`[${label}] 页面加载失败，自动刷新一次`);
+            try { await win.loadURL(url, { userAgent: SEARCH_UA }); } catch (_) { /* 继续尝试读取 */ }
+            assertActive();
+            continue;
+          }
+        }
         await new Promise((r) => setTimeout(r, 400));
       }
 
@@ -1183,6 +1301,13 @@ async function runSniffOnUrl(url, label) {
         let pageTitle = '';
         try { pageTitle = await evaluate('document.title'); } catch (_) {}
         assertActive();
+        let pageFailed = false;
+        try {
+          pageFailed = (await evaluate('(() => /加载失败|请刷新页面重试/.test(document.body ? document.body.innerText : ""))()')) === true;
+        } catch (_) { pageFailed = false; }
+        assertActive();
+        // 页面明确报错时不能当成“确实没有结果”，否则搜索失败会被说成没找到。
+        if (pageFailed) return { success: false, results: [], pageTitle, meta, error: '红果搜索页面加载失败，请稍后重试' };
         return { success: true, results: [], pageTitle, meta };
       }
 
@@ -1200,15 +1325,26 @@ async function runSniffOnUrl(url, label) {
     finally { clearTimeout(timer); }
   };
 
-  // 串行化
+  // 串行化；deadline 同时覆盖排队时间，避免排队后又拿到完整的 15 秒。
   const prev = searchWindowReady || Promise.resolve();
-  const next = prev.then(task, task);
-  searchWindowReady = next.catch(() => {});
-  return next;
+  const queued = prev.then(task, task);
+  searchWindowReady = queued.catch(() => {});
+  if (!deadline) return queued;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    queued.catch(() => {});
+    throw new Error('搜索超时，请稍后重试');
+  }
+  let guardTimer;
+  const guard = new Promise((_, reject) => {
+    guardTimer = setTimeout(() => reject(new Error('搜索超时，请稍后重试')), remaining);
+  });
+  try { return await Promise.race([queued, guard]); }
+  finally { clearTimeout(guardTimer); }
 }
 
-async function runSearchSniff(keyword) {
-  return runSniffOnUrl(`${SEARCH_SITE}/search/${encodeURIComponent(keyword)}`, 'Search');
+async function runSearchSniff(keyword, options = {}) {
+  return runSniffOnUrl(`${SEARCH_SITE}/search/${encodeURIComponent(keyword)}`, 'Search', { deadline: options.deadline || 0 });
 }
 
 // ===== 浏览：分类页（含题材筛选与分页）=====
@@ -1266,36 +1402,180 @@ ipcMain.handle('test-custom-source', async (_event,draft) => {
 });
 
 
-ipcMain.handle('browse-list', (_event, options) =>
-  require(String(options?.source).startsWith('custom:') ? './src/native/custom-source' : options?.source === 'hema' ? './src/native/hema'
+ipcMain.handle('browse-list', (_event, options) => {
+  if (proxyStartupFallback) return { success: false, error: '网络代理配置无效，请先在设置中修复或明确关闭代理。' };
+  return require(String(options?.source).startsWith('custom:') ? './src/native/custom-source' : options?.source === 'hema' ? './src/native/hema'
     : options?.source === 'xifan' ? './src/native/xifan' : './src/native/catalog').browseList(options, (authInfo, callback) => {
       if (matchesProxyAuth(authInfo)) callback(activeProxyAuth.username, activeProxyAuth.password);
       else callback();
-    }));
+    });
+});
+
+const normalizeSearchTitle = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+
+/** 标点/空格导致原名搜不到时，给出最多两个去标点或取首段的补搜词。 */
+function relaxedHongguoQueries(keyword) {
+  const text = String(keyword || '').normalize('NFKC').trim();
+  const stripped = text.replace(/[\s\p{P}\p{S}]+/gu, '');
+  const candidates = [];
+  if (stripped && stripped !== text) candidates.push(stripped);
+  const firstClause = text.split(/[\s\p{P}\p{S}]+/u).map(part => part.trim()).find(part => part.length >= 2);
+  if (firstClause && firstClause !== text && !candidates.includes(firstClause)) candidates.push(firstClause);
+  return candidates.slice(0, 2);
+}
+
+let appSearchCooldownUntil = 0;
+const APP_SEARCH_COOLDOWN_MS = 2 * 60 * 1000;
+let proxyStartupFallback = false;
 
 async function searchAtSource(keyword, options = {}) {
+  const page = options.page === undefined ? 1 : options.page;
+  if (!Number.isSafeInteger(page) || page < 1 || page > 50) throw new Error('搜索页码必须是 1 至 50 的整数');
+  const source = options.source || 'hongguo';
+  if (page > 1 && source !== 'hongguo' && options.channel && options.channel !== source) throw new Error('搜索通道已变化，请重新搜索');
+  const response = await searchAtSourcePage(keyword, { ...options, page });
+  if (!response?.success) return response;
+  const hasMore = response.hasMore === true && page < 50;
+  return { ...response, channel: response.channel || source, page, hasMore,
+    nextPage: hasMore ? page + 1 : null, cursor: response.cursor || null,
+    meta: { ...(response.meta || {}), page, hasMore } };
+}
+
+async function searchAtSourcePage(keyword, options = {}) {
+  const deadline = Number(options?.deadline) || 0;
   if (String(options?.source).startsWith('custom:')) return require('./src/native/custom-source').searchSeries(keyword, options);
-  if (options?.source === 'hema') return require('./src/native/hema').search(keyword);
-  if (options?.source === 'xifan') return require('./src/native/xifan').search(keyword);
+  if (options?.source === 'hema') return require('./src/native/hema').search(keyword, options.page, { deadline });
+  if (options?.source === 'xifan') return require('./src/native/xifan').search(keyword, options.page, { deadline });
   if (options?.source && options.source !== 'hongguo') throw new Error('不支持的搜索来源');
-  return runSearchSniff(keyword);
+  const requestOptions = deadline ? { deadline } : undefined;
+  const page = options.page;
+  const searchQuery = normalizeSearchTitle(keyword);
+  const hasTitleMatch = items => !!searchQuery && items.some(item => normalizeSearchTitle(item.series_title).includes(searchQuery));
+  // 第 2 页起必须固定第一页选中的通道，不能中途换源造成重复/漏结果。
+  if (page > 1) {
+    if (options?.channel === 'app') {
+      try {
+        const result = await require('./src/native/hongguo-app-search').searchApp(keyword, { page, cursor: options.cursor || null, deadline });
+        appSearchCooldownUntil = 0;
+        return { ...result, via: 'app', meta: { total: result.results.length, page, hasMore: result.hasMore, relaxed: false } };
+      } catch (error) {
+        appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
+        throw error;
+      }
+    }
+    if (options?.channel === 'web') {
+      const response = await searchHongguo(keyword, { ...requestOptions, page });
+      return { ...response, success: true, via: 'api', channel: 'web', page, cursor: { page, nextPage: response.nextPage || null }, hasMore: !!response.hasMore, meta: { total: response.total, page, totalPages: response.totalPages, hasMore: !!response.hasMore, relaxed: false } };
+    }
+    throw new Error('该搜索通道不支持加载更多，请重新搜索');
+  }
+  const appEnabled = (options?.appSearch === true || (options?.appSearch !== false && getCurrentSettings().search_app_enabled === true))
+    && Date.now() >= appSearchCooldownUntil;
+  let appFallbackError = '';
+  if (appEnabled) {
+    try {
+      const appDeadline = Math.min(deadline || Date.now() + 3500, Date.now() + 3500);
+      const app = await require('./src/native/hongguo-app-search').searchApp(keyword, { page: 1, deadline: appDeadline });
+      if (app.results.length && hasTitleMatch(app.results)) {
+        appSearchCooldownUntil = 0;
+        return { ...app, via: 'app', pageTitle: '', meta: { total: app.results.length, page: 1, hasMore: app.hasMore, relaxed: false } };
+      }
+      appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
+      appFallbackError = app.results.length ? 'App 搜索没有标题匹配' : 'App 搜索没有返回结果';
+    } catch (error) {
+      appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
+      appFallbackError = error.message || 'App 搜索不可用';
+      console.warn('[Search] 红果 App 搜索失败，回退官网:', appFallbackError);
+    }
+  }
+  // 官网搜索页的结果由前端请求 /api/search/result 后渲染；直接调用接口
+  // 避免一次页面加载失败就空等到 15 秒。接口结构变化时才退回页面嗅探。
+  try {
+    const response = await searchHongguo(keyword, requestOptions);
+    let results = response.results;
+    const attempted = [], fuzzyErrors = [];
+    if (options?.fuzzy !== false && !hasTitleMatch(results)) {
+      // 标点/空格让来源没搜到原名时，先用去标点全名、再用首段各补搜一次；
+      // 命中完整标题或两次都失败就停止，最多两次额外请求。
+      for (const relaxed of relaxedHongguoQueries(keyword)) {
+        if (deadline && Date.now() >= deadline) { fuzzyErrors.push('搜索时间预算已用完'); break; }
+        try {
+          const extra = await searchHongguo(relaxed, requestOptions);
+          const merged = new Map(results.map(item => [String(item.series_id), item]));
+          for (const item of extra.results) {
+            const id = String(item.series_id);
+            if (!merged.has(id)) merged.set(id, { ...item, fuzzy: true, fuzzy_query: relaxed });
+          }
+          results = [...merged.values()];
+          attempted.push(relaxed);
+          if (hasTitleMatch(results)) break;
+        } catch (error) {
+          fuzzyErrors.push(error.message || '补搜失败');
+          console.warn('[Search] 红果模糊补搜失败:', error.message);
+        }
+      }
+    }
+    const relaxedQuery = attempted.join('、');
+    const meta = {
+      total: response.total,
+      page: response.page,
+      totalPages: response.totalPages,
+      hasMore: response.hasMore,
+      relaxed: attempted.length > 0,
+      relaxedQuery,
+    };
+    const webMeta = { ...meta, channel: 'web', cursor: { page: response.page, nextPage: response.nextPage || null }, hasMore: !!response.hasMore };
+    if (fuzzyErrors.length && !results.length) {
+      // 原词和补搜都没有结果，不能把服务错误说成“没有找到”。
+      return { success: false, results: [], via: 'api', channel: 'web', error: `搜索失败：${[...new Set(fuzzyErrors)].join('；')}`, meta: webMeta, appError: appFallbackError };
+    }
+    if (fuzzyErrors.length) {
+      return { success: true, results, pageTitle: '', via: 'api', channel: 'web', partial: true, error: `模糊补搜未完成：${[...new Set(fuzzyErrors)].join('；')}`, meta: webMeta, hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
+    }
+    return { success: true, results, pageTitle: '', via: 'api', channel: 'web', meta: webMeta, hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
+  } catch (error) {
+    console.warn('[Search] 红果接口失败:', error.message);
+    if (error.fallback !== true) throw error;
+    if (deadline && Date.now() >= deadline) {
+      return { success: false, results: [], via: 'dom', partial: true, error: '搜索超时，页面兜底未开始', apiError: error.message };
+    }
+    try {
+      const sniffed = await runSearchSniff(keyword, { deadline });
+      return { ...sniffed, via: 'dom', channel: 'dom', hasMore: false, cursor: null, apiError: error.message, appError: appFallbackError };
+    } catch (fallbackError) {
+      console.warn('[Search] 页面兜底失败:', fallbackError.message);
+      return { success: false, results: [], via: 'dom', partial: true, error: `搜索未完成：${fallbackError.message}`, apiError: error.message };
+    }
+  }
 }
 
 ipcMain.handle('search-series', async (event, keyword, options = {}) => {
   try {
-    return await seriesSearch.searchSeries(keyword, kw => searchAtSource(kw, options));
+    const deadline = Date.now() + 20000;
+    return await seriesSearch.searchSeries(keyword, (kw, call) => searchAtSource(kw, { ...options, deadline, ...(call || {}) }), [], { deadline });
   } catch (error) {
     console.error('[Search] 失败:', error.message);
     return { success: false, error: error.message };
   }
 });
 
+ipcMain.handle('search-series-more', async (event, keyword, options = {}) => {
+  try {
+    if (!Number.isSafeInteger(options?.page) || options.page < 2 || options.page > 50) throw new Error('加载更多页码必须是 2 至 50 的整数');
+    const deadline = Date.now() + 12000;
+    return await searchAtSource(keyword, { ...options, deadline, fuzzy: false });
+  } catch (error) {
+    return { success: false, results: [], error: error.message, channel: options?.channel || '', cursor: options?.cursor || null };
+  }
+});
+
 ipcMain.handle('find-series-sequels', async (_event, seriesId, options = {}) => {
   const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
   if (!entry) return { success: false, results: [], error: '未找到该剧档案，请先打开剧集详情。' };
+  const deadline = Date.now() + 22000;
   return seriesSearch.findSeriesSequels(entry, seriesRegistry.filter(item => !item.forgotten),
-    kw => searchAtSource(kw, { source: watchHistory.sourceOf(String(entry.series_id)) }),
-    { localOnly: options?.localOnly === true });
+    (kw, call) => searchAtSource(kw, { source: watchHistory.sourceOf(String(entry.series_id)), deadline, ...(call || {}) }),
+    { localOnly: options?.localOnly === true, deadline });
 });
 
 // 搜索选中某部剧后，拉取完整分集并登记档案
@@ -2224,6 +2504,7 @@ function diskMediaResponse(request,entry,session) {
     session.requests.delete(controller); request.signal.removeEventListener('abort',abort);
     entry.disk.readers--; disposeOnlineDisk(entry);
   });
+  trackOnlineWork(controller, new Promise(resolve => reader.once('close', resolve)));
   if (request.signal.aborted) abort();
   return new Response(Readable.toWeb(reader),{status:range?206:200,headers});
 }
@@ -2262,7 +2543,7 @@ function registerStreamProtocol() {
         if (playInfo.format === 'hls') {
           if (!entry.hlsJob) {
             entry.hlsIdentity = identity;
-            entry.hlsJob = (async () => {
+            entry.hlsJob = trackOnlineWork(controller, (async () => {
               const prepared = {...entry}; delete prepared.hlsJob;
               await prepareHlsEntry(playInfo,prepared,controller.signal,received => sendToRenderer('online-play-progress',
                 {vid:session.vid,seriesId:entry.seriesId,vidIndex:entry.vidIndex,requestId:session.requestId,received,total:0,percent:0,phase:'downloading'}));
@@ -2270,7 +2551,7 @@ function registerStreamProtocol() {
               Object.assign(entry,prepared,{mediaIdentity:identity,vid:session.vid,source:/^custom:[^:]+/.exec(session.vid)?.[0] || 'hongguo',complete:true});
               delete entry.playInfo;
               onlineCache.set(session.cacheKey || session.vid,entry); trimOnlineCache();
-            })().catch(error => { delete entry.hlsJob; delete entry.hlsIdentity; throw error; });
+            })().catch(error => { delete entry.hlsJob; delete entry.hlsIdentity; throw error; }));
           }
           if (entry.hlsIdentity !== identity) throw new Error('片源已变化，请重新连接播放');
           await entry.hlsJob; checkIdentity();
@@ -2279,7 +2560,7 @@ function registerStreamProtocol() {
         }
         // A fallback can change encryption and size; serve Range only after decoding that candidate.
         if (playInfo.spadeA || playInfo.contentKey) {
-          const buffer = await fetchDecryptedEpisodeOnce(session.vid, null, entry.seriesId, playInfo, controller.signal);
+          const buffer = await trackOnlineWork(controller, fetchDecryptedEpisodeOnce(session.vid, null, entry.seriesId, playInfo, controller.signal));
           checkIdentity();
           entry.buffer = buffer; entry.size = buffer.length; entry.mediaIdentity = identity; delete entry.playInfo;
           session.mediaStarted = true; session.mediaIdentity = identity;
@@ -2519,7 +2800,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
       if (!job || (force && !job.force)) {
         const controller = new AbortController();
         job = { controller, force };
-        job.promise = (async () => {
+        job.promise = trackOnlineWork(controller, (async () => {
           const progress = (received,total,phase) => {
             for (const active of onlineSessions.values()) if (active.cacheKey === key) {
               sendToRenderer('online-play-progress',{vid:sourceVid,seriesId,vidIndex,requestId:active.requestId,
@@ -2543,7 +2824,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
           for (const active of onlineSessions.values()) if (active.job === job) active.entry = {...prepared};
           if (prepared.complete && onlinePreparing.get(key) === job) { onlineCache.set(key,prepared); trimOnlineCache(); }
           return prepared;
-        })().finally(() => { if (onlinePreparing.get(key) === job) onlinePreparing.delete(key); });
+        })().finally(() => { if (onlinePreparing.get(key) === job) onlinePreparing.delete(key); }));
         onlinePreparing.set(key, job);
       }
       session.job = job;
@@ -3163,18 +3444,21 @@ async function refreshWatchHistory(force = false) {
         const source = watchHistory.sourceOf(sid);
         if (source && settings.watch_sequels_enabled !== false && (force || now - (previous?.lastSequelCheckAt || 0) >= 24 * 60 * 60 * 1000)) {
           try {
+            const deadline = Date.now() + 22000;
             const response = await seriesSearch.findSeriesSequels(oldSeries, seriesRegistry.filter(item => !item.forgotten),
-              keyword => searchAtSource(keyword, { source }));
+              (keyword, call) => searchAtSource(keyword, { source, deadline, ...(call || {}) }), { deadline });
             if (!response?.success) throw new Error(response?.error || '搜索暂不可用');
             candidates = response.results || [];
             if (response.partial) sequelError = `新集已检查；续作检查未完成：${response.error || '请稍后重试'}`;
           } catch (error) { sequelError = `新集已检查；续作检查失败：${error.message}`; }
         }
-        // Re-read after network waits: a concurrent player save must not be rolled back.
+        // Re-read after network waits: a concurrent player save or episode refresh must not be rolled back.
         const map = store.getPlayback();
         if (!map[sid]) continue;
+        const currentSeries = seriesRegistry.find(item => String(item.series_id) === sid);
+        if (!currentSeries) continue;
         const previousRecord = map[sid];
-        const next = watchHistory.applyEpisodeUpdate(previousRecord, oldSeries, fresh);
+        const next = watchHistory.applyEpisodeUpdate(previousRecord, currentSeries, fresh);
         if (candidates) {
           const combined = new Map((previousRecord.sequels || []).map(item => [item.series_id, item]));
           for (const item of candidates) combined.set(item.series_id, item);
@@ -3182,13 +3466,12 @@ async function refreshWatchHistory(force = false) {
           if (!sequelError) next.lastSequelCheckAt = Date.now();
         }
         next.lastCheckError = sequelError;
-        const newEpisodes = next.knownTotal > (previousRecord.knownTotal ?? oldSeries.total ?? oldSeries.episodes.length);
+        const newEpisodes = next.knownTotal > (previousRecord.knownTotal ?? currentSeries.total ?? currentSeries.episodes?.length ?? 0);
         const knownSequels = new Set((previousRecord.sequels || []).map(item => item.series_id));
         const newSequel = candidates?.some(item => !knownSequels.has(item.series_id));
-        if (fresh.episodes.length >= oldSeries.episodes.length) {
-          const currentSeries = seriesRegistry.find(item => String(item.series_id) === sid);
-          const wasDismissed = currentSeries?.dismissed === true;
-          const wasForgotten = currentSeries?.forgotten === true;
+        if (fresh.episodes.length >= (currentSeries.episodes?.length || 0)) {
+          const wasDismissed = currentSeries.dismissed === true;
+          const wasForgotten = currentSeries.forgotten === true;
           upsertSeriesRegistry(fresh);
           if (wasDismissed) {
             Object.assign(seriesRegistry.find(item => String(item.series_id) === sid), { dismissed: true, forgotten: wasForgotten });
@@ -3256,7 +3539,7 @@ ipcMain.handle('select-folder', async () => {
   return result.filePaths[0];
 });
 
-const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
+const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
 
 function settingsForRenderer(settings) {
   const copy = { ...settings };
@@ -3281,23 +3564,44 @@ function applyEditableSettings(current, incoming) {
 
 ipcMain.handle('get-settings', async () => settingsForRenderer(getCurrentSettings()));
 
-ipcMain.handle('save-settings', async (event, settings) => {
+async function saveSettings(settings) {
   try {
     const current = getCurrentSettings();
     const wasCheckingUpdates = current.app_updates_enabled !== false;
     const merged = applyEditableSettings(current, settings);
     merged.download_quality = normalizeDownloadQuality(merged.download_quality);
-    store.saveSettings(merged);
+    validateProxyDraft(merged);
+    // 先让代理真正生效，再落盘；任一步失败都恢复旧代理，避免坏配置锁死下次启动。
+    try { await applyProxyWithTimeout(merged, 15000); }
+    catch (error) {
+      try { await applyProxyWithTimeout(current, 5000); } catch (_) { /* 旧配置也可能已不可用 */ }
+      throw error;
+    }
+    // Window/source preferences may change while the native proxy operation is pending.
+    const latest = applyEditableSettings(getCurrentSettings(), settings);
+    latest.download_quality = merged.download_quality;
+    try { store.saveSettings(latest); }
+    catch (error) {
+      try { await applyProxyWithTimeout(current, 5000); } catch (_) { /* 旧配置也可能已不可用 */ }
+      throw error;
+    }
     if (merged.app_updates_enabled === false) { updateDownloadGeneration++; appUpdateInstaller?.cancel(); }
     if (wasCheckingUpdates !== (merged.app_updates_enabled !== false)) {
       sendToRenderer('app-update-preference', merged.app_updates_enabled !== false);
     }
     getCurrentSettings(); // 刷新并发数
-    await applyProxySettings(merged); // 立即生效，无需重启
+    proxyStartupFallback = false;
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
   }
+}
+
+let settingsSaveQueue = Promise.resolve();
+ipcMain.handle('save-settings', (_event, settings) => {
+  const result = settingsSaveQueue.then(() => saveSettings(settings));
+  settingsSaveQueue = result.catch(() => {});
+  return result;
 });
 
 // ===== IPC：网络代理 =====
@@ -3592,15 +3896,31 @@ ipcMain.handle('cleanup-watched-episode', async (_event, seriesId, vidIndex) => 
 });
 
 /** 各处磁盘占用统计（用于展示「可释放多少」） */
+/** 统计与删除共用同一目标集合：包括已移除档案和只有下载任务的剧。 */
+function deletionTargets() {
+  const targets = new Map();
+  for (const series of seriesRegistry) {
+    const id = String(series?.series_id || '').trim();
+    if (id) targets.set(id, series.series_title || '');
+  }
+  for (const task of downloadTasks) {
+    const info = task?.hongguoInfo;
+    const id = String(info?.series_id || '').trim();
+    if (!id) continue;
+    if (!targets.has(id)) targets.set(id, info.series_title || '');
+  }
+  return [...targets].map(([series_id, series_title]) => ({ series_id, series_title }));
+}
+
 ipcMain.handle('get-storage-usage', async () => {
   try {
     const series = [];
     let totalBytes = 0;
     let totalFiles = 0;
-    for (const s of seriesRegistry) {
-      if (s.dismissed) continue;
-      const owned = collectSeriesEpisodeFiles(s.series_id, s.series_title);
-      const merging = mergeTasks.some(task => String(task.seriesId) === String(s.series_id) && task.status === 'running');
+    for (const target of deletionTargets()) {
+      const entry = seriesRegistry.find(item => String(item.series_id) === target.series_id);
+      const owned = collectSeriesEpisodeFiles(target.series_id, target.series_title || entry?.series_title || '');
+      const merging = mergeTasks.some(task => String(task.seriesId) === String(target.series_id) && task.status === 'running');
       const paths = merging ? [] : new Set([...owned.episodePaths, ...owned.temporaryPaths, ...owned.mergedPaths, ...owned.concatPaths]);
       let bytes = 0, files = 0, merged = 0;
       for (const file of paths) {
@@ -3615,9 +3935,9 @@ ipcMain.handle('get-storage-usage', async () => {
       totalBytes += bytes;
       totalFiles += files;
       series.push({
-        series_id: String(s.series_id),
-        series_title: s.series_title,
-        total: (s.episodes || []).length,
+        series_id: target.series_id,
+        series_title: target.series_title || entry?.series_title || '',
+        total: (entry?.episodes || []).length,
         files,
         bytes,
         merged,
@@ -3635,8 +3955,8 @@ ipcMain.handle('delete-all-downloaded', async () => {
   try {
     let freed = 0, count = 0, failed = 0, skipped = 0;
     const errors = [];
-    const targets = [...new Set([...seriesRegistry.map(s => s.series_id), ...downloadTasks.map(t => t.hongguoInfo?.series_id).filter(Boolean)])];
-    for (const sid of targets) {
+    const targets = deletionTargets();
+    for (const { series_id: sid } of targets) {
       if (mergeTasks.some(task => String(task.seriesId) === String(sid) && task.status === 'running')) { skipped++; continue; }
       const result = deleteSeriesFiles(sid);
       if (result.error) errors.push(result.error);
@@ -3676,6 +3996,7 @@ ipcMain.handle('retry-task', async (event, taskId) => {
   if (!task) return { success: false, error: '任务不存在' };
   if (!['failed', 'stopped'].includes(task.status) && !(task.status === 'completed' && !hasCompleteTaskFile(task))) return { success: false, error: '任务仍在进行中或已完成' };
 
+  const snapshot = snapshotQueueTasks([task]);
   clearSourceRetry(task);
   repairTaskDestination(task);
 
@@ -3689,7 +4010,8 @@ ipcMain.handle('retry-task', async (event, taskId) => {
   delete task.writer;
 
   if (!downloadQueue.some((t) => t.id === taskId)) downloadQueue.push(task);
-  saveDownloadTasks();
+  try { saveDownloadTasks(); }
+  catch (error) { restoreQueueTasks(snapshot); return { success: false, error: error.message }; }
   processDownloadQueue();
   return { success: true };
 });
@@ -3697,25 +4019,30 @@ ipcMain.handle('retry-task', async (event, taskId) => {
 ipcMain.handle('retry-tasks', async (event, taskIds) => {
   if (!Array.isArray(taskIds) || taskIds.length === 0) return { success: false, error: '没有要重试的任务' };
   let count = 0;
+  const changed = [];
   for (const taskId of taskIds) {
     const task = downloadTasks.find((t) => t.id === taskId);
-    if (task && (task.status === 'failed' || task.status === 'stopped' || (task.status === 'completed' && !hasCompleteTaskFile(task)))) {
-      clearSourceRetry(task);
-      repairTaskDestination(task);
-      task.status = 'pending';
-      task.progress = 0;
-      task.receivedBytes = 0;
-      task.totalBytes = 0;
-      task.cancelled = false;
-      delete task.error;
-      delete task.cancelSource;
-      delete task.writer;
-      if (!downloadQueue.some((t) => t.id === taskId)) downloadQueue.push(task);
-      count++;
-    }
+    if (task && (task.status === 'failed' || task.status === 'stopped' || (task.status === 'completed' && !hasCompleteTaskFile(task)))) changed.push(task);
+  }
+  const snapshot = snapshotQueueTasks(changed);
+  for (const task of changed) {
+    const taskId = task.id;
+    clearSourceRetry(task);
+    repairTaskDestination(task);
+    task.status = 'pending';
+    task.progress = 0;
+    task.receivedBytes = 0;
+    task.totalBytes = 0;
+    task.cancelled = false;
+    delete task.error;
+    delete task.cancelSource;
+    delete task.writer;
+    if (!downloadQueue.some((t) => t.id === taskId)) downloadQueue.push(task);
+    count++;
   }
   if (count > 0) {
-    saveDownloadTasks();
+    try { saveDownloadTasks(); }
+    catch (error) { restoreQueueTasks(snapshot); return { success: false, error: error.message, count: 0 }; }
     processDownloadQueue();
   }
   return { success: true, count };
@@ -3724,7 +4051,10 @@ ipcMain.handle('retry-tasks', async (event, taskIds) => {
 // ===== IPC：一键启动 / 一键暂停 =====
 ipcMain.handle('pause-all', async () => ({ success: true, count: pauseAllTasks() }));
 
-ipcMain.handle('resume-all', async () => ({ success: true, count: resumeAllTasks() }));
+ipcMain.handle('resume-all', async () => {
+  try { return { success: true, count: resumeAllTasks() }; }
+  catch (error) { return { success: false, count: 0, error: error.message }; }
+});
 
 // 队列实时状态（供界面显示「进行中 x/并发上限」）
 ipcMain.handle('get-queue-status', async () => ({
@@ -3766,7 +4096,8 @@ let latestAppRelease = null;
 function appUpdateSupport() {
   let reason = '';
   if (IS_PREVIEW || !app.isPackaged) reason = '开发或预览版本不支持应用内安装，请使用正式安装版。';
-  else if (process.platform === 'win32' && (process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR)) reason = '便携版需手动更新。请先退出旧程序，再运行发布页中的 setup 安装包，并从安装后生成的快捷方式启动；安装版支持后续应用内更新。若仍用便携版，请完整解压新版并直接运行新版文件。';
+  else if (process.platform === 'win32' && (portableConfig.mode === 'portable' || portableConfig.portableDir
+    || process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR)) reason = '便携版需手动更新。请先退出旧程序，再运行发布页中的 setup 安装包，并从安装后生成的快捷方式启动；安装版支持后续应用内更新。若仍用便携版，请完整解压新版并直接运行新版文件。';
   else if (!['darwin', 'win32'].includes(process.platform)) reason = '当前系统请前往发布页手动更新。';
   else if (process.platform === 'darwin' && (process.execPath.startsWith('/Volumes/') || process.execPath.includes('/AppTranslocation/'))) reason = '请先将应用放入“应用程序”文件夹后重新打开，再使用应用内更新。';
   return { supported: !reason, reason };
@@ -3806,7 +4137,7 @@ ipcMain.handle('download-app-update', async () => {
     const request = updateDownloadGeneration;
     const installer = getAppUpdateInstaller();
     if (!['checking', 'downloading', 'downloaded', 'installing'].includes(installer.getState().status)) {
-      await applyProxyToSession(resolveProxyConfig(getCurrentSettings()), [appUpdater.netSession]);
+      await applyProxyToSession(desiredProxyConfig || resolveProxyConfig(getCurrentSettings()), [appUpdater.netSession]);
     }
     if (request !== updateDownloadGeneration) return { success: false, error: '更新已取消。', state: installer.getState() };
     return await installer.download(latestAppRelease.version);
@@ -3824,6 +4155,7 @@ ipcMain.handle('install-app-update', () => {
   return appUpdateInstaller.install();
 });
 ipcMain.handle('check-app-update', async event => {
+  if (proxyStartupFallback) return { enabled: false, release: null, error: '请先修复或明确关闭代理。' };
   if (IS_PREVIEW || !mainWindow || event.sender !== mainWindow.webContents) return { enabled: false, release: null };
   if (getCurrentSettings().app_updates_enabled === false) {
     latestAppRelease = null;
@@ -3882,6 +4214,9 @@ ipcMain.handle('get-app-info', async () => ({
   appName: APP_TITLE,
   platform: process.platform,
   preview: IS_PREVIEW,
+  dataDir: app.getPath('userData'),
+  configMode: portableConfig.mode,
+  configNote: portableConfig.reason || '',
 }));
 
 // 打开外部链接（保留给需要时调用）
@@ -4053,21 +4388,18 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
     // 代理必须在创建窗口、发起任何请求之前生效
     startupStage = '初始化网络';
-    let proxyDeadline;
-    try {
-      await Promise.race([
-        applyProxySettings(settings),
-        new Promise((_, reject) => { proxyDeadline = setTimeout(() => reject(new Error('Proxy startup timeout')), 15000); }),
-      ]);
-    } finally { clearTimeout(proxyDeadline); }
-
-    // 启动后自动接着跑「等待中」的任务（上次未下完的队列），无需手动点启动
-    // Automatic source retries scheduled before the app closed continue on the same schedule.
-    for (const task of downloadTasks) if (task.status === 'failed' && task.retryAt) armSourceRetry(task);
-    const resumed = enqueuePendingTasks();
-    if (resumed > 0) {
-      console.log(`[Queue] 启动自动续跑 ${resumed} 个等待中任务，并发 ${MAX_CONCURRENT_DOWNLOADS}`);
-      pumpQueue();
+    const proxyStartup = await applyProxyForStartup(settings);
+    proxyStartupFallback = proxyStartup.fallback;
+    if (proxyStartup.fallback) console.warn('[Proxy] 启动代理不可用，已临时直连:', proxyStartup.reason);
+    else {
+      // 启动后自动接着跑「等待中」的任务（上次未下完的队列），无需手动点启动
+      // Automatic source retries scheduled before the app closed continue on the same schedule.
+      for (const task of downloadTasks) if (task.status === 'failed' && task.retryAt) armSourceRetry(task);
+      const resumed = enqueuePendingTasks();
+      if (resumed > 0) {
+        console.log(`[Queue] 启动自动续跑 ${resumed} 个等待中任务，并发 ${MAX_CONCURRENT_DOWNLOADS}`);
+        pumpQueue();
+      }
     }
 
     app.on('activate', () => {
@@ -4116,8 +4448,24 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     }
     startupStage = '创建主窗口';
     createWindow();
-    setTimeout(() => { void refreshWatchHistory(); }, 10000).unref();
-    setInterval(() => { void refreshWatchHistory(); }, 15 * 60 * 1000).unref();
+    if (proxyStartup.fallback) {
+      // 只停自动任务；窗口仍打开，用户可在设置中修复代理或明确关闭代理。
+      setTimeout(() => {
+        try {
+          dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            title: `${APP_TITLE} 网络代理`,
+            message: '上次保存的代理配置无法生效，已临时使用直连启动。',
+            detail: `自动续下载、追剧刷新和浏览页自动请求已暂停，避免绕过你设置的代理。${proxyStartup.fallbackError ? `\n临时直连也失败：${proxyStartup.fallbackError}` : ''}\n请在设置中修复代理，或明确关闭代理后保存。`,
+            buttons: ['知道了'],
+            noLink: true,
+          }).catch(() => {});
+        } catch (_) { /* 无窗口环境忽略 */ }
+      }, 500);
+    } else {
+      setTimeout(() => { void refreshWatchHistory(); }, 10000).unref();
+      setInterval(() => { void refreshWatchHistory(); }, 15 * 60 * 1000).unref();
+    }
   } catch (_) {
     console.error(`[Startup] ${startupStage}失败`);
     try {
@@ -4133,7 +4481,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', event => {
   if (quitCleanup) { event.preventDefault(); return; }
   const jobs = [...compatPreparing.values()];
-  const pending = [...jobs.map(job => job.promise), ...mergeRuns.values(), ...downloadRuns.values()];
+  const onlineJobs = [...onlineWork, ...onlinePreparing.values()];
+  const pending = [...jobs.map(job => job.promise), ...onlineJobs.map(job => job.promise), ...mergeRuns.values(), ...downloadRuns.values()];
   if (compatClearing) pending.push(compatClearing);
   if (mergeTempCleanup) pending.push(mergeTempCleanup);
   const downloading = downloadRuns.size || downloadQueue.length || sourceRetryTimers.size;
@@ -4147,6 +4496,7 @@ app.on('before-quit', event => {
     }
   }
   for (const job of jobs) cancelCompatJob(job);
+  for (const job of onlineJobs) { try { job.controller.abort(); } catch (_) {} }
   for (const task of mergeTasks) {
     if (task.status !== 'running') continue;
     task.cancelled = true;

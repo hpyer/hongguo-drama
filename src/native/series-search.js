@@ -1,7 +1,7 @@
 const { seasonTitle, sourceOf, findSequels } = require('./watch-history');
 
-const normalizeTitle = title => String(title || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-const score = (title, keyword) => title === keyword ? 0 : title.includes(keyword) ? 1 : 2;
+const normalizeTitle = title => String(title || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+const score = (title, keyword) => !keyword ? 2 : title === keyword ? 0 : title.includes(keyword) ? 1 : 2;
 function rankedUnique(results, keyword) {
   const seen = new Set(), normalized = normalizeTitle(keyword);
   return results.filter(item => {
@@ -20,10 +20,10 @@ function nextSeasonQueries(base, season) {
 }
 
 // One primary search plus at most two supplements; never recursively expand upstream results.
-async function searchSeries(keyword, search, knownSeries = [], { afterSeason = 1 } = {}) {
+async function searchSeries(keyword, search, knownSeries = [], { afterSeason = 1, deadline = 0 } = {}) {
   const kw = String(keyword || '').trim();
   if (!kw || kw.length > 200) return { success: false, results: [], error: '请输入 1 至 200 字的搜索词' };
-  const primary = await search(kw);
+  const primary = await search(kw, { fuzzy: true, deadline });
   if (!primary?.success) return primary || { success: false, results: [], error: '搜索暂不可用' };
   const results = [...(primary.results || [])], parsed = seasonTitle(kw);
   let queries = [];
@@ -42,23 +42,26 @@ async function searchSeries(keyword, search, knownSeries = [], { afterSeason = 1
   }
   const errors = [];
   for (const query of queries) {
+    if (deadline && Date.now() >= deadline) { errors.push('搜索时间预算已用完'); break; }
     try {
-      const response = await search(query);
+      const response = await search(query, { fuzzy: false, deadline });
       if (!response?.success) throw new Error(response?.error || '来源未返回结果');
       results.push(...(response.results || []));
     } catch (error) { errors.push(error.message); }
   }
-  return { ...primary, results: rankedUnique(results, kw), ...(errors.length ? { partial: true, error: `补充搜索未完成：${[...new Set(errors)].join('；')}` } : {}) };
+  const supplementError = errors.length ? `补充搜索未完成：${[...new Set(errors)].join('；')}` : '';
+  const partialErrors = [primary.error, supplementError].filter(Boolean);
+  return { ...primary, results: rankedUnique(results, kw), ...(partialErrors.length ? { partial: true, error: partialErrors.join('；') } : {}) };
 }
 
-async function findSeriesSequels(series, localCandidates, search, { localOnly = false } = {}) {
+async function findSeriesSequels(series, localCandidates, search, { localOnly = false, deadline = 0 } = {}) {
   const parsed = seasonTitle(series?.series_title), source = sourceOf(String(series?.series_id || ''));
   if (!source) return { success: false, results: [], error: '此来源暂不支持查找下一季，请按完整剧名搜索。' };
   if (!parsed.base || parsed.invalid || parsed.season > 99) return { success: false, results: [], error: '剧名或季数无法识别，请按完整剧名搜索。' };
   const local = findSequels(series, localCandidates);
   if (localOnly) return { success: true, results: local };
   try {
-    const response = await searchSeries(parsed.base, search, [series, ...local], { afterSeason: parsed.season });
+    const response = await searchSeries(parsed.base, search, [series, ...local], { afterSeason: parsed.season, deadline });
     if (!response?.success) throw new Error(response?.error || '来源搜索失败');
     return { success: true, results: findSequels(series, [...local, ...(response.results || [])]), ...(response.partial ? { partial: true, error: response.error } : {}) };
   } catch (error) {

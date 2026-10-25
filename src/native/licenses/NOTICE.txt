@@ -14,4 +14,6 @@ Modifications made 2026-10-07: limited playback adapter, local ephemeral
 visitor identifiers, removal of fixed visitor fingerprints, strict response
 and destination validation, supported-codec selection and no secret logging.
 SM3 is implemented locally for Electron runtimes without native SM3 support.
-The existing application remains GPL-3.0.
+The optional 3.4 App search request reuses the same signature routines for a
+GET query (hash branch 0 only); it keeps the local ephemeral device identity and
+is disabled by default. The existing application remains GPL-3.0.

@@ -1,0 +1,172 @@
+// Offline App-search wiring: opt-in, website fallback, and channel-pinned pagination.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const { createRequire } = require('node:module');
+const source = path.resolve(__dirname, '../main.js'), req = createRequire(source);
+
+const unexpectedSearch = async () => { throw new Error('Unexpected search provider call'); };
+
+function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = unexpectedSearch,
+  hemaSearch = unexpectedSearch, xifanSearch = unexpectedSearch, customSearch = unexpectedSearch } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-app-search-'));
+  const handlers = {}, app = new EventEmitter();
+  Object.assign(app, {
+    getVersion: () => 'test', getPath: () => dir, commandLine: { appendSwitch() {}, hasSwitch: () => false },
+    requestSingleInstanceLock: () => true, whenReady: () => ({ then() {} }),
+  });
+  const electron = { app, ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, protocol: { registerSchemesAsPrivileged() {} } };
+  const overrides = {
+    electron,
+    './src/store': { getSettings: () => ({ search_app_enabled: appEnabled }) },
+    './src/native/hongguo-search': { searchHongguo: webSearch },
+    './src/native/hongguo-app-search': { searchApp: appSearch },
+    './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
+    './src/native/hema': { search: hemaSearch },
+    './src/native/xifan': { search: xifanSearch },
+    './src/native/custom-source': { searchSeries: customSearch },
+  };
+  const context = vm.createContext({ require: name => overrides[name] || req(name), __dirname: path.dirname(source), process,
+    console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
+  require('./fixtures/trusted-ipc.cjs')(context, handlers);
+  return { handlers, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+(async () => {
+  const calls = [];
+  const appSearch = async (keyword, options) => {
+    calls.push({ keyword, options });
+    return { success: true, channel: 'app', page: options.page || 1, hasMore: options.page !== 2,
+      cursor: { search_id: 'sid', passback: 'pb', next_offset: 20 },
+      results: [{ series_id: options.page === 2 ? '2000002' : '2000001', series_title: `${keyword}${options.page === 2 ? '第二页' : ''}` }] };
+  };
+  let webCalls = 0;
+  const h = load({ appSearch, webSearch: async () => { webCalls++; return { results: [], total: 0, page: 1, totalPages: 1, hasMore: false }; } });
+  const first = await h.handlers['search-series']({}, '测试剧', { source: 'hongguo' });
+  assert.equal(first.success, true);
+  assert.equal(first.channel, 'app');
+  assert.equal(first.via, 'app');
+  assert.equal(webCalls, 0, 'enabled App search must be tried first');
+  const more = await h.handlers['search-series-more']({}, '测试剧', { source: 'hongguo', channel: 'app', page: 2, cursor: first.cursor });
+  assert.equal(more.success, true);
+  assert.equal(more.results[0].series_id, '2000002');
+  assert.equal(calls.at(-1).options.page, 2);
+  assert.deepEqual(calls.at(-1).options.cursor, { search_id: 'sid', passback: 'pb', next_offset: 20 });
+  h.cleanup();
+
+  const h2 = load({
+    appSearch: async () => { throw Object.assign(new Error('app down'), { code: 'APP_EMPTY' }); },
+    webSearch: async () => ({ results: [{ series_id: '3000001', series_title: '官网结果' }], total: 1, page: 1, totalPages: 1, hasMore: true }),
+  });
+  const fallback = await h2.handlers['search-series']({}, '测试剧', { source: 'hongguo' });
+  assert.equal(fallback.success, true);
+  assert.equal(fallback.channel, 'web');
+  assert.equal(fallback.results[0].series_title, '官网结果');
+  assert.match(fallback.appError, /app down/);
+  h2.cleanup();
+
+  const h3 = load({ appEnabled: false, appSearch: async () => { throw new Error('must not run'); }, webSearch: async () => ({ results: [{ series_id: '4000001', series_title: '官网' }], total: 1, page: 1, totalPages: 1, hasMore: false }) });
+  const disabled = await h3.handlers['search-series']({}, '测试剧', { source: 'hongguo' });
+  assert.equal(disabled.channel, 'web');
+  h3.cleanup();
+  console.log('PASS app search IPC: opt-in App first, website fallback, pinned cursor pagination');
+
+  let failures = 0;
+  async function check(name, run) {
+    try { await run(); console.log('PASS ' + name); }
+    catch (error) { failures++; console.error('FAIL ' + name + ': ' + error.message); }
+  }
+
+  await check('website page two returns success with the real native response shape', async () => {
+    const requests = [];
+    const { searchHongguo } = req('./src/native/hongguo-search');
+    const fixture = load({ appEnabled: false, webSearch: (keyword, options) => searchHongguo(keyword, {
+      ...options, cache: false, retries: 0,
+      request: async (query, page) => {
+        requests.push({ query, page });
+        return { searchList: [{ video_data: { series_id: '5000002', series_title: '官网第二页' } }],
+          totalCount: 3, pageNum: page, totalPages: 3, hasMore: true };
+      },
+    }) });
+    try {
+      const result = await fixture.handlers['search-series-more']({}, '测试剧', { source: 'hongguo', channel: 'web', page: 2 });
+      assert.equal(result.success, true, 'native website result has no success field; IPC must supply it');
+      assert.equal(result.channel, 'web');
+      assert.equal(result.page, 2);
+      assert.equal(result.results[0].series_id, '5000002');
+      assert.equal(result.hasMore, true);
+      assert.equal(result.meta.hasMore, true);
+      assert.deepEqual(requests, [{ query: '测试剧', page: 2 }]);
+    } finally { fixture.cleanup(); }
+  });
+
+  const providers = [
+    { source: 'hongguo', channel: 'app', key: 'appSearch' },
+    { source: 'hongguo', channel: 'web', key: 'webSearch' },
+    { source: 'hema', key: 'hemaSearch' },
+    { source: 'xifan', key: 'xifanSearch' },
+    { source: 'custom:fixture', key: 'customSearch' },
+  ];
+  function providerFixture(provider, hasMore) {
+    const calls = [];
+    const fixture = load({ [provider.key]: async (keyword, pageOrOptions, requestOptions) => {
+      const options = typeof pageOrOptions === 'object' ? pageOrOptions : { ...requestOptions, page: pageOrOptions };
+      calls.push({ keyword, options });
+      const page = options.page;
+      return { ...(provider.channel === 'web' ? {} : { success: true }), channel: provider.channel,
+        results: [{ series_id: `${provider.source}:${page}`, series_title: `测试剧第${page}页` }],
+        page, total: 100, totalPages: 100, hasMore, nextPage: hasMore ? page + 1 : null,
+        cursor: provider.channel === 'app' ? { next_offset: page * 20 } : undefined };
+    } });
+    return { ...fixture, calls };
+  }
+
+  for (const provider of providers.filter(item => !item.channel)) for (const hasMore of [true, false]) {
+    await check(`${provider.source} forwards page two and hasMore=${hasMore}`, async () => {
+      const fixture = providerFixture(provider, hasMore);
+      try {
+        const result = await fixture.handlers['search-series-more']({}, '测试剧', { source: provider.source, page: 2 });
+        assert.equal(result.success, true);
+        assert.equal(result.page, 2, 'page two must not repeat the first page');
+        assert.equal(result.results[0].series_id, `${provider.source}:2`);
+        assert.equal(result.hasMore, hasMore);
+        assert.equal(fixture.calls.length, 1);
+        assert.equal(fixture.calls[0].options.page, 2);
+        assert.ok(fixture.calls[0].options.deadline > Date.now());
+      } finally { fixture.cleanup(); }
+    });
+  }
+
+  for (const provider of providers) {
+    const label = provider.channel || provider.source;
+    await check(`${label} page fifty terminates pagination even if the provider advertises more`, async () => {
+      const fixture = providerFixture(provider, true);
+      try {
+        const result = await fixture.handlers['search-series-more']({}, '测试剧', { source: provider.source, channel: provider.channel, page: 50 });
+        assert.equal(result.hasMore, false);
+        if (result.meta) assert.equal(result.meta.hasMore, false);
+        assert.equal(result.success, true);
+        assert.equal(result.page, 50);
+        assert.equal(fixture.calls.length, 1);
+        assert.equal(fixture.calls[0].options.page, 50);
+      } finally { fixture.cleanup(); }
+    });
+    await check(`${label} rejects invalid and out-of-range pages before calling the provider`, async () => {
+      const fixture = providerFixture(provider, true);
+      try {
+        const notRejected = [];
+        for (const page of [0, 1, -1, 2.5, 'invalid', NaN, Infinity, 51]) {
+          const result = await fixture.handlers['search-series-more']({}, '测试剧', { source: provider.source, channel: provider.channel, page });
+          if (result.success !== false || !result.error) notRejected.push(String(page));
+        }
+        assert.deepEqual(notRejected, [], 'every invalid page must be rejected with a visible error');
+        assert.equal(fixture.calls.length, 0, 'invalid pages must never fetch or silently clamp to another page');
+      } finally { fixture.cleanup(); }
+    });
+  }
+  if (failures) process.exitCode = 1;
+})().catch(error => { console.error(error.stack); process.exitCode = 1; });

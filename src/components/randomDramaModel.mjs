@@ -54,14 +54,23 @@ export function pickRandomDrama(items, previous, random = Math.random) {
   return candidates.length ? candidates[Math.min(candidates.length - 1, Math.max(0, Math.floor(random() * candidates.length)))] : null;
 }
 
-export async function playRecommendedDrama(api, item, { signal } = {}) {
+export async function playRecommendedDrama(api, item, { signal, resume = true } = {}) {
   signal?.throwIfAborted();
   const result = await waitForRequest(api.searchResolve(item.series_id), { signal, message: '分集加载超时，请重试本剧' });
   signal?.throwIfAborted();
   if (!result?.success) throw new Error(result?.error || '暂时无法加载这部剧');
   if (String(result.data?.series_id) !== String(item.series_id)) throw new Error('来源返回的剧集不匹配，请重试');
-  const first = result.data.episodes?.find(episode => !episode.locked && Number.isSafeInteger(episode.vid_index) && episode.vid_index > 0);
+  const playable = result.data.episodes?.filter(episode => !episode.locked && Number.isSafeInteger(episode.vid_index) && episode.vid_index > 0) || [];
+  const first = playable[0];
   if (!first) throw new Error('这部剧暂时没有可免费播放的分集，请换一部');
-  const playback = await waitForRequest(api.playSeries({ seriesId: String(item.series_id), vidIndex: first.vid_index }), { signal, message: '打开剧库超时，请重试' });
+  let saved = null;
+  if (resume && typeof api.getPlaybackPosition === 'function') {
+    try { saved = await waitForRequest(api.getPlaybackPosition(String(item.series_id)), { signal, message: '读取播放进度超时，请重试本剧' }); }
+    catch (error) { if (signal?.aborted) throw error; }
+  }
+  const savedIndex = Number(saved?.vid_index);
+  const target = savedIndex > 0 ? playable.find(episode => episode.vid_index === savedIndex) : null;
+  const episode = target || first;
+  const playback = await waitForRequest(api.playSeries({ seriesId: String(item.series_id), vidIndex: episode.vid_index, resume: !!target }), { signal, message: '打开剧库超时，请重试' });
   if (!playback?.success) throw new Error(playback?.error || '打开剧库失败，请重试');
 }

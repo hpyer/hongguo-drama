@@ -24,12 +24,16 @@ function load(sid, { partial = false } = {}) {
     return { success: true, results: keyword.includes('第三季') ? [{ series_id: id(3), series_title: '春日来信第三季' }] : [] };
   };
   const store = { getSettings: () => ({}), getPlayback: () => structuredClone(playback), savePlayback: next => { playback = structuredClone(next); }, saveSeries() {} };
-  const overrides = { electron, './src/store': store, './src/native/hongguo': { fetchEpisodeList: async () => current }, './src/native/xifan': { search: search('xifan') }, './src/native/hema': { search: search('hema') } };
+  const hongguoSearch = { searchHongguo: async keyword => {
+    const result = await search('hongguo')(keyword);
+    if (!result.success) throw new Error(result.error || 'fixture offline');
+    return { results: result.results || [], total: (result.results || []).length, page: 1, totalPages: 1, hasMore: false };
+  } };
+  const overrides = { electron, './src/store': store, './src/native/hongguo': { fetchEpisodeList: async () => current }, './src/native/hongguo-search': hongguoSearch, './src/native/xifan': { search: search('xifan') }, './src/native/hema': { search: search('hema') } };
   const context = vm.createContext({ require: name => overrides[name] || req(name), __dirname: path.dirname(source), process, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   context.fixture = [current, fourth]; vm.runInContext('seriesRegistry = fixture', context);
-  context.runSearchSniff = search('hongguo');
   return { queries, run: () => handlers['refresh-watch-history']({}), record: () => playback[sid], cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 

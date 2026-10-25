@@ -38,6 +38,15 @@ async function evaluate(expression) {
   assert(!reply.exceptionDetails, JSON.stringify(reply.exceptionDetails));
   return reply.result.value;
 }
+function attachCdpResponses(ws) {
+  ws.addEventListener('message', event => {
+    const message = JSON.parse(event.data);
+    if (!message.id) return;
+    const call = pending.get(message.id);
+    pending.delete(message.id);
+    if (call) message.error ? call.reject(new Error(JSON.stringify(message.error))) : call.resolve(message.result);
+  });
+}
 async function clickControl(label) {
   const point = await evaluate(`(async () => {
     const button = document.querySelector(${JSON.stringify(`[aria-label="${label}"]`)});
@@ -102,6 +111,58 @@ async function keyHandoff(key, code, expectedSource) {
   const ffprobe = path.join(packaged, 'resources/bin/ffprobe.exe');
   for (const file of [exe, ffmpeg, ffprobe]) pe64(file);
   result.checks.push('Portable payload: Electron/FFmpeg/FFprobe are PE x64');
+  // Real portable startup: copy the single-file EXE elsewhere, launch it without
+  // --user-data-dir, then verify the running app reports the program-relative
+  // configMode/dataDir and actually persists a setting into data/data.json.
+  const portableDataRoot = path.join(temp, 'portable-data');
+  fs.mkdirSync(portableDataRoot, { recursive: true });
+  const portableCopy = path.join(portableDataRoot, path.basename(portable));
+  fs.copyFileSync(portable, portableCopy);
+  const portablePort = 9438;
+  const isolatedAppData = path.join(temp, 'portable-appdata');
+  fs.mkdirSync(isolatedAppData, { recursive: true });
+  const portableChild = spawn(portableCopy, ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + portablePort], { stdio: 'ignore', env: { ...process.env, APPDATA: isolatedAppData } });
+  try {
+    let target;
+    for (let i = 0; i < 150; i++) {
+      try { target = (await (await fetch(`http://127.0.0.1:${portablePort}/json`)).json()).find(t => t.type === 'page' && t.url.startsWith('file:')); } catch {}
+      if (target) break;
+      await delay(200);
+    }
+    assert(target, 'Portable EXE without --user-data-dir did not open its renderer');
+    socket = new WebSocket(target.webSocketDebuggerUrl);
+    attachCdpResponses(socket);
+    await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate('Boolean(window.electronAPI && document.querySelector("#root")?.children.length)')) break;
+      await delay(100);
+    }
+    const info = await evaluate('window.electronAPI.getAppInfo()');
+    const expectedDataDir = path.resolve(path.join(portableDataRoot, 'data')).toLowerCase();
+    assert.equal(info.configMode, 'portable', 'Portable app must report configMode=portable');
+    assert.equal(path.resolve(info.dataDir).toLowerCase(), expectedDataDir, 'Portable app must use the program-relative data directory');
+    const saved = await evaluate(`(async () => {
+      const settings = await window.electronAPI.getSettings();
+      const next = Number(settings.max_concurrent) === 5 ? 6 : 5;
+      settings.max_concurrent = next;
+      settings.proxy_enabled = false;
+      settings.app_updates_enabled = false;
+      const result = await window.electronAPI.saveSettings(settings);
+      return { result, expected: next };
+    })()`);
+    assert(saved?.result?.success !== false, 'Portable settings save must succeed');
+    const expectedFile = path.join(portableDataRoot, 'data', 'data.json');
+    for (let i = 0; i < 50 && !fs.existsSync(expectedFile); i++) await delay(100);
+    assert(fs.existsSync(expectedFile), 'Portable save must create data/data.json next to the program');
+    assert.equal(JSON.parse(fs.readFileSync(expectedFile, 'utf8')).settings.max_concurrent, saved.expected, 'Portable save must persist the requested setting');
+    result.checks.push('Portable EXE without --user-data-dir reports program-relative config and persists settings there');
+  } finally {
+    try { socket?.close(); } catch {}
+    socket = null;
+    try { execFileSync('taskkill', ['/PID', String(portableChild.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+  }
+  await delay(800);
+
   for (const file of ['LICENSE.txt', 'NOTICE.txt', 'THIRD-PARTY-NOTICES.md', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'resources/bin/WINDOWS-NOTICE.txt', 'resources/bin/WINDOWS-X264-LICENSE.txt', 'resources/bin/WINDOWS-MINGW-LICENSE.txt', 'resources/bin/WINDOWS-GCC-LICENSE.txt', 'resources/bin/COPYING.GPLv3']) assert(fs.statSync(path.join(packaged, file)).size > 20, file);
   result.checks.push('Application, Electron, Chromium, FFmpeg and x264 notices present');
   result.ffmpeg = execFileSync(ffmpeg, ['-version'], { encoding: 'utf8', windowsHide: true }).split('\n')[0];
@@ -135,12 +196,7 @@ async function keyHandoff(key, code, expectedSource) {
   }
   assert(target, 'Packaged application did not open its renderer');
   socket = new WebSocket(target.webSocketDebuggerUrl);
-  socket.addEventListener('message', event => {
-    const message = JSON.parse(event.data);
-    if (!message.id) return;
-    const call = pending.get(message.id); pending.delete(message.id);
-    if (call) message.error ? call.reject(new Error(JSON.stringify(message.error))) : call.resolve(message.result);
-  });
+  attachCdpResponses(socket);
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   for (let i = 0; i < 50; i++) {
     if (await evaluate('Boolean(window.electronAPI && document.querySelector("#root")?.children.length)')) break;

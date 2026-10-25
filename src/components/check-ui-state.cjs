@@ -527,6 +527,137 @@ async function mount(file, api, props = {}) {
     ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render(); ui.button('搜索').props.onClick(); await ui.flush();
     assert.ok(ui.find(n => n.props.role === 'alert')); assert.ok(!ui.text().includes('没有找到相关短剧')); ui.unmount();
   });
+  await test('load more locks duplicate clicks before a render', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = await mount('SearchPanel', {
+      searchSeries: async (_kw, { source }) => ({ success: true, results: source === 'hongguo' ? [{ series_id: '1000001', series_title: '首屏' }] : [], channel: 'web', page: 1, hasMore: source === 'hongguo' }),
+      searchSeriesMore: () => { calls++; return pending.promise; },
+    });
+    ui.find(n => n.props['aria-label'] === '搜索短剧名称').props.onChange({ target: { value: '剧名' } }); ui.render();
+    await ui.button('搜索').props.onClick(); await ui.flush();
+    const click = ui.button('加载更多').props.onClick;
+    const first = click(), duplicate = click();
+    assert.equal(calls, 1, 'a duplicate click must not issue another request for the same page');
+    pending.resolve({ success: true, results: [], page: 2, hasMore: false });
+    await Promise.all([first, duplicate]); await ui.flush(); ui.unmount();
+  });
+  for (const transition of ['keyword', 'source', 'search', 'active']) await test(`load more stale completion preserves the new lock after ${transition}`, async () => {
+    const old = deferred(), current = deferred(); let calls = 0;
+    const ui = await mount('SearchPanel', {
+      searchSeries: async (_kw, { source }) => ({ success: true, results: [{ series_id: `${source}:1`, series_title: '当前首屏' }], channel: 'web', page: 1, hasMore: true }),
+      searchSeriesMore: () => { calls++; return calls === 1 ? old.promise : current.promise; },
+    });
+    const source = () => ui.find(n => n.props['aria-label'] === '短剧来源');
+    const input = () => ui.find(n => n.props['aria-label'] === '搜索短剧名称');
+    source().props.onChange({ target: { value: 'hongguo' } }); ui.render();
+    input().props.onChange({ target: { value: '旧词' } }); ui.render();
+    await ui.button('搜索').props.onClick(); await ui.flush();
+    const oldTask = ui.button('加载更多').props.onClick(); await ui.flush();
+    if (transition === 'keyword') { input().props.onChange({ target: { value: '新词' } }); ui.render(); }
+    if (transition === 'source') { source().props.onChange({ target: { value: 'hema' } }); ui.render(); }
+    if (transition === 'active') { ui.setProps({ active: false }); ui.setProps({ active: true }); await ui.flush(); }
+    else { await ui.button('搜索').props.onClick(); await ui.flush(); }
+    const more = ui.button('加载更多');
+    assert.ok(more && !more.props.disabled, 'returning to the page must allow a fresh paging request');
+    const currentTask = more.props.onClick(); await ui.flush();
+    old.resolve({ success: true, results: [{ series_id: '9999999', series_title: '过期第二页' }], channel: 'web', page: 2, hasMore: false });
+    await oldTask; await ui.flush();
+    assert.ok(ui.button('加载中…')?.props.disabled, 'an obsolete completion cannot unlock the current request');
+    assert.ok(!ui.text().includes('过期第二页'), 'cancelled paging must not append its results');
+    current.resolve({ success: true, results: [{ series_id: '8888888', series_title: '当前第二页' }], channel: 'web', page: 2, hasMore: false });
+    await currentTask; await ui.flush();
+    assert.ok(ui.text().includes('当前第二页')); ui.unmount();
+  });
+  await test('load more deadline keeps completed sources and retries only the unfinished page', async () => {
+    const old = deferred(), retry = deferred(), calls = [];
+    const ui = await mount('SearchPanel', {
+      searchSeries: async (_kw, { source }) => ({ success: true, results: source === 'xifan' ? [] : [{ series_id: `${source}:1`, series_title: `${source}首屏` }], channel: 'web', page: 1, cursor: { page: 1 }, hasMore: source !== 'xifan' }),
+      searchSeriesMore: (_kw, options) => {
+        calls.push(options);
+        if (options.source === 'hongguo') return Promise.resolve({ success: true, results: [{ series_id: '1000002', series_title: '已完成第二页' }], channel: 'web', page: 2, hasMore: false });
+        return calls.filter(call => call.source === 'hema').length === 1 ? old.promise : retry.promise;
+      },
+    });
+    ui.find(n => n.props['aria-label'] === '搜索短剧名称').props.onChange({ target: { value: '剧名' } }); ui.render();
+    await ui.button('搜索').props.onClick(); await ui.flush();
+    const firstTask = ui.button('加载更多').props.onClick(); await ui.flush();
+    ui.advanceTimers(25000); await ui.flush();
+    assert.ok(ui.text().includes('已完成第二页'), 'one hanging source must not discard a completed page');
+    assert.ok(ui.text().includes('河马短剧') && ui.text().includes('超时'));
+    assert.ok(!ui.button('加载更多').props.disabled, 'the deadline must release its own request lock');
+    const nextTask = ui.button('加载更多').props.onClick(); await ui.flush();
+    assert.equal(calls.length, 3, 'a completed source must not be requested again');
+    assert.equal(calls[2].source, 'hema'); assert.equal(calls[2].page, 2); assert.equal(calls[2].cursor.page, 1);
+    old.resolve({ success: true, results: [{ series_id: 'hema:8', series_title: '超时迟到页' }], channel: 'web', page: 2, hasMore: false });
+    await firstTask; await ui.flush();
+    assert.ok(ui.button('加载中…')?.props.disabled); assert.ok(!ui.text().includes('超时迟到页'));
+    retry.resolve({ success: true, results: [{ series_id: 'hema:2', series_title: '重试第二页' }], channel: 'web', page: 2, hasMore: false });
+    await nextTask; await ui.flush();
+    assert.ok(ui.text().includes('已完成第二页') && ui.text().includes('重试第二页'));
+    assert.equal(ui.button('加载更多'), undefined); ui.unmount();
+  });
+  await test('load more follows the first-page channel and merges results', async () => {
+    const calls = [];
+    const ui = await mount('SearchPanel', {
+      searchSeries: async (_kw, { source }) => source === 'hongguo'
+        ? { success: true, results: [{ series_id: '1000001', series_title: '第一部' }], channel: 'web', page: 1, hasMore: true, cursor: { page: 1, nextPage: 2 } }
+        : { success: true, results: [] },
+      searchSeriesMore: async (_kw, options) => {
+        calls.push(options);
+        return { success: true, results: [{ series_id: '1000002', series_title: '第二部' }], channel: 'web', page: 2, hasMore: false, cursor: { page: 2, nextPage: null } };
+      },
+    });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '连载剧' } }); ui.render();
+    ui.button('搜索').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('第一部'));
+    await ui.button('加载更多').props.onClick(); await ui.flush();
+    assert.equal(calls[0].source, 'hongguo');
+    assert.equal(calls[0].channel, 'web');
+    assert.equal(calls[0].page, 2);
+    assert.equal(calls[0].cursor.page, 1);
+    assert.equal(calls[0].cursor.nextPage, 2);
+    assert.ok(ui.text().includes('第二部'), 'the second page must be merged into the list');
+    assert.equal(ui.button('加载更多'), undefined, 'the button must disappear when no source has more');
+    ui.unmount();
+  });
+  await test('empty hongguo results open the source page for the searched keyword', async () => {
+    const opened = [];
+    const ui = await mount('SearchPanel', {
+      searchSeries: async () => ({ success: true, results: [] }),
+      searchWindowShow: async (...args) => { opened.push(args); return { success: true }; },
+    });
+    ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'hongguo' } }); ui.render();
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '谁说 纨绔' } }); ui.render();
+    ui.button('搜索').props.onClick(); await ui.flush();
+    await ui.button('打开来源页面').props.onClick(); await ui.flush();
+    assert.deepEqual(opened[0], [true, `https://hongguoduanju.com/search/${encodeURIComponent('谁说 纨绔')}`]);
+    ui.unmount();
+  });
+  await test('a search timeout still keeps results from sources that already finished', async () => {
+    const pending = deferred();
+    const ui = await mount('SearchPanel', { searchSeries: (kw, options) => options.source === 'hongguo'
+      ? pending.promise
+      : Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '先返回的剧' }] }) });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render();
+    ui.button('搜索').props.onClick(); await ui.flush();
+    ui.advanceTimers(26000); await ui.flush();
+    assert.ok(ui.text().includes('先返回的剧'), 'completed sources must stay visible after another source times out');
+    assert.ok(ui.text().includes('未返回结果'), 'the unfinished source must be named');
+    assert.ok(ui.find(n => n.props.role === 'alert'), 'the timeout must be announced');
+    pending.resolve({ success: true, results: [] }); await ui.flush(); ui.unmount();
+  });
+
+  await test('a stuck all-source search stops spinning after the safety timeout', async () => {
+    const pending = deferred();
+    const ui = await mount('SearchPanel', { searchSeries: () => pending.promise });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render();
+    ui.button('搜索').props.onClick(); await ui.flush();
+    ui.advanceTimers(26000); await ui.flush();
+    assert.ok(ui.text().includes('搜索超时'), 'a stuck search must surface a timeout');
+    assert.ok(!ui.text().includes('正在寻找相关短剧'), 'loading copy must stop after the timeout');
+    pending.resolve({ success: true, results: [] }); await ui.flush(); ui.unmount();
+  });
+
   await test('xifan search source change ignores late searches and detail picks', async () => {
     const old = deferred(), pick = deferred(), picked = []; const calls = [];
     const ui = await mount('SearchPanel', { searchSeries: (kw, options) => { calls.push(options); return options?.source === 'xifan' ? Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '西饭搜索' }] }) : old.promise; }, searchResolve: () => pick.promise }, { onSelectSeries: d => picked.push(d) });
@@ -701,6 +832,23 @@ async function mount(file, api, props = {}) {
     await ui.button('保存设置').props.onClick(); ui.render();
     assert.ok(ui.text().includes('磁盘空间不足')); assert.equal(ui.find(n => n.props['aria-label'] === '下载目录').props.value, '/new');
     assert.ok(!ui.text().includes('已保存')); ui.unmount();
+  });
+  await test('settings reactivation reflects playback switches while keeping the draft', async () => {
+    let stored = { root: '/old', auto_delete_watched: false, cache_next_episode: false, compat_mode: false };
+    const ui = await mount('Settings', { getSettings: async () => ({ ...stored }) });
+    await ui.flush();
+    ui.find(n => n.props['aria-label'] === '下载目录').props.onChange({ target: { value: '/new' } }); ui.render();
+    ui.setProps({ active: false });
+    stored = { ...stored, auto_delete_watched: true, cache_next_episode: true, compat_mode: true };
+    ui.setProps({ active: true }); await ui.flush();
+    const label = text => ui.find(n => n.type === 'label' && n.children.some(child => child?.props?.className === 'proxy-switch-text' && child.children[0] === text));
+    for (const [text, key] of [['看完自动删除', 'auto_delete_watched'], ['缓存下一集', 'cache_next_episode'], ['自动兼容模式', 'compat_mode']]) {
+      const control = label(text);
+      assert.ok(control, text);
+      assert.equal(control.children.find(n => n?.type === 'input').props.checked, stored[key], `${text} must reflect the latest playback setting`);
+    }
+    assert.equal(ui.find(n => n.props['aria-label'] === '下载目录').props.value, '/new', 'refreshing must keep the unsaved draft');
+    ui.unmount();
   });
   await test('settings retained drafts preserve newer playback options and retry explicit edits', async () => {
     let stored = { root: '/old', auto_delete_watched: true, cache_next_episode: true, compat_mode: true };

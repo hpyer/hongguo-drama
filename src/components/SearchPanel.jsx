@@ -6,19 +6,9 @@ import { readSearchHistory, saveSearchTerm, removeSearchTerm, clearSearchHistory
 
 import useMediaSources from './useMediaSources';
 import { mediaSourceLabel } from './mediaSourcesModel.mjs';
+import { rankSearchResults } from './searchRanking.mjs';
 
-export function rankSearchResults(results, keyword) {
-  const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-  const query = normalize(keyword), seen = new Set();
-  return results.filter(item => {
-    const key = `${item.source}:${item.series_id}`;
-    if (!item.series_id || !item.series_title || seen.has(key)) return false;
-    seen.add(key); return true;
-  }).map(item => {
-    const title = normalize(item.series_title);
-    return { ...item, relevance: title === query ? 0 : title.includes(query) ? 1 : 2 };
-  }).sort((a, b) => a.relevance - b.relevance);
-}
+const SEARCH_SAFETY_TIMEOUT_MS = 25000;
 
 /**
  * SearchPanel —— 按所选来源搜索短剧
@@ -29,7 +19,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
   const { sources: mediaSources, revision: sourceRevision, loading: sourcesLoading, error: sourcesError } = useMediaSources();
   const requestVersion = useRef(0);
   const pendingSearch = useRef(null);
-  useEffect(() => () => { requestVersion.current++; }, []);
+  useEffect(() => () => { requestVersion.current++; cancelMore(); }, []);
   const [keyword, setKeyword] = useState('');
   const [history, setHistory] = useState(readSearchHistory);
   const [historyError, setHistoryError] = useState('');
@@ -40,7 +30,16 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
   const [error, setError] = useState('');
   const [searchWarning, setSearchWarning] = useState('');
   const [pageTitle, setPageTitle] = useState('');
+  const [searchedKeyword, setSearchedKeyword] = useState('');
+  const [more, setMore] = useState({});
+  const [moreLoading, setMoreLoading] = useState(false);
+  const [moreError, setMoreError] = useState('');
+  const moreRequest = useRef(null);
   const [pickingId, setPickingId] = useState('');
+  const cancelMore = () => {
+    clearTimeout(moreRequest.current?.timer);
+    moreRequest.current = null;
+  };
 
   useEffect(() => {
     if (!active) {
@@ -48,12 +47,13 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
       pendingSearch.current = null;
       setPickingId('');
       setLoading(false);
+      cancelMore(); setMoreLoading(false); setMoreError('');
     }
   }, [active]);
 
   useEffect(() => {
     requestVersion.current++; pendingSearch.current = null;
-    setLoading(false); setPickingId(''); setResults(null); setError(''); setSearchWarning(''); setPageTitle('');
+    setLoading(false); setPickingId(''); setResults(null); setError(''); setSearchWarning(''); setPageTitle(''); setMore({}); setMoreError(''); setMoreLoading(false); cancelMore();
     if (source !== 'all' && !mediaSources.some(item => item.id === source)) setSource('all');
   }, [sourceRevision, mediaSources]);
 
@@ -68,6 +68,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
     setError('');
     setSearchWarning('');
     setPageTitle('');
+    setMore({}); setMoreError(''); setMoreLoading(false); cancelMore();
   };
 
   const changeKeyword = (value) => {
@@ -79,6 +80,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
     setResults(null);
     setError('');
     setSearchWarning('');
+    setMore({}); setMoreError(''); setMoreLoading(false); cancelMore();
   };
 
   const clearHistory = () => {
@@ -117,27 +119,32 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
     setSearchWarning('');
     setResults(null);
     setPageTitle('');
-    try {
-      const sources = source === 'all' ? mediaSources.map(item => item.id) : [source];
-      const responses = await Promise.allSettled(sources.map(async (searchSource) => {
-        const res = await window.electronAPI.searchSeries(kw, { source: searchSource });
-        if (!res?.success) throw new Error(res?.error || '搜索失败，请重试');
-        return res;
-      }));
-      if (request !== requestVersion.current) return;
-      const merged = [], failures = [], warnings = [];
-      responses.forEach((response, index) => {
-        const searchSource = sources[index];
-        if (response.status === 'fulfilled') {
-          merged.push(...(response.value.results || []).map(item => ({ ...item, source: searchSource })));
-          if (response.value.partial) warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：${response.value.error || '补充搜索未完成，可稍后重试。'}`);
-          if (sources.length === 1) setPageTitle(response.value.pageTitle || '');
+    setMore({}); setMoreError(''); setMoreLoading(false); cancelMore();
+    setSearchedKeyword(kw);
+    const sources = source === 'all' ? mediaSources.map(item => item.id) : [source];
+    const settled = new Array(sources.length);
+    const applyResponses = (timedOut) => {
+      const merged = [], failures = [], warnings = [], nextMore = {};
+      sources.forEach((searchSource, index) => {
+        const entry = settled[index];
+        if (!entry) {
+          if (timedOut) failures.push(`${mediaSourceLabel(searchSource, mediaSources)}：搜索超时，未返回结果`);
+          return;
+        }
+        if (entry.status === 'fulfilled') {
+          merged.push(...(entry.value.results || []).map(item => ({ ...item, source: searchSource })));
+          if (entry.value.partial) warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：${entry.value.error || '补充搜索未完成，可稍后重试。'}`);
+          if (entry.value.meta?.relaxed) warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：没有完整剧名匹配，已用「${entry.value.meta.relaxedQuery}」补搜。`);
+          if (sources.length === 1) setPageTitle(entry.value.pageTitle || '');
+          if (entry.value.channel && entry.value.channel !== 'dom' && entry.value.hasMore) {
+            nextMore[searchSource] = { channel: entry.value.channel, cursor: entry.value.cursor || null, page: entry.value.page || 1, hasMore: true };
+          }
         } else {
-          failures.push(`${mediaSourceLabel(searchSource, mediaSources)}：${response.reason?.message || '搜索失败'}`);
+          failures.push(`${mediaSourceLabel(searchSource, mediaSources)}：${entry.reason?.message || '搜索失败'}`);
         }
       });
       rememberCatalogTitles(merged);
-      if (responses.some((response) => response.status === 'fulfilled')) {
+      if (settled.some(entry => entry?.status === 'fulfilled')) {
         try {
           setHistory(saveSearchTerm(kw));
           setHistoryError('');
@@ -146,13 +153,41 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
         }
       }
       setResults(rankSearchResults(merged, kw));
+      setMore(nextMore);
       setSearchWarning(warnings.join('；'));
       if (failures.length) setError(`${failures.join('；')}。${merged.length ? '已显示其他来源的结果。' : ''}请重试或切换来源。`);
+    };
+    const safety = setTimeout(() => {
+      if (request !== requestVersion.current) return;
+      requestVersion.current++;
+      pendingSearch.current = null;
+      applyResponses(true);
+      setLoading(false);
+    }, SEARCH_SAFETY_TIMEOUT_MS);
+    try {
+      // 每个来源完成就记下来；总超时到达时仍能展示已完成来源的结果。
+      const responses = await Promise.allSettled(sources.map((searchSource, index) => window.electronAPI.searchSeries(kw, { source: searchSource })
+        .then(res => {
+          if (!res?.success) throw new Error(res?.error || '搜索失败，请重试');
+          const entry = { status: 'fulfilled', value: res };
+          settled[index] = entry;
+          return entry;
+        })
+        .catch(error => {
+          const entry = { status: 'rejected', reason: error };
+          settled[index] = entry;
+          throw error;
+        })));
+      if (request !== requestVersion.current) return;
+      responses.forEach((entry, index) => { settled[index] ||= entry; });
+      applyResponses(false);
     } catch (e) {
       if (request !== requestVersion.current) return;
-      setError('搜索异常: ' + e.message);
-      setResults([]);
+      // allSettled 通常不会 reject；保留防御路径，避免同步异常留下空转圈。
+      settled.forEach((entry, index) => { if (!entry) settled[index] = { status: 'rejected', reason: e }; });
+      applyResponses(false);
     } finally {
+      clearTimeout(safety);
       if (pendingSearch.current?.request === request) pendingSearch.current = null;
       if (request === requestVersion.current) setLoading(false);
     }
@@ -180,10 +215,60 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
 
   const showBrowser = async () => {
     try {
-      const res = await window.electronAPI.searchWindowShow(true);
+      const term = (searchedKeyword || keyword).trim();
+      const sourceUrl = term ? `https://hongguoduanju.com/search/${encodeURIComponent(term)}` : undefined;
+      const res = await window.electronAPI.searchWindowShow(true, sourceUrl);
       if (res?.success === false) throw new Error(res.error || '来源页面打开失败');
     } catch (e) { setError(e.message || '来源页面打开失败，请重试'); }
   };
+
+  const loadMore = async () => {
+    const entries = Object.entries(more).filter(([, state]) => state.hasMore);
+    const kw = searchedKeyword.trim();
+    if (!active || sourcesLoading || moreRequest.current || !kw || !entries.length) return;
+    const request = { responses: new Map(), timer: null };
+    moreRequest.current = request;
+    setMoreLoading(true); setMoreError('');
+    const finish = (timedOut = false) => {
+      if (moreRequest.current !== request) return;
+      cancelMore();
+      const nextMore = { ...more }, additions = [], errors = [];
+      for (const [searchSource, state] of entries) {
+        const response = request.responses.get(searchSource);
+        if (response?.success) {
+          additions.push(...(response.results || []).map(item => ({ ...item, source: searchSource })));
+          if (response.hasMore) nextMore[searchSource] = { channel: response.channel || state.channel, cursor: response.cursor || null, page: response.page || state.page + 1, hasMore: true };
+          else delete nextMore[searchSource];
+        } else {
+          errors.push(`${mediaSourceLabel(searchSource, mediaSources)}：${response?.error || (timedOut && !response ? '加载更多超时，请重试' : '加载更多失败')}`);
+        }
+      }
+      if (additions.length) {
+        setResults(prev => {
+          const map = new Map((prev || []).map(item => [`${item.source}:${item.series_id}`, item]));
+          for (const item of additions) map.set(`${item.source}:${item.series_id}`, item);
+          return rankSearchResults([...map.values()], kw);
+        });
+      }
+      setMore(nextMore);
+      setMoreError(errors.join('；'));
+      setMoreLoading(false);
+    };
+    // Preserve completed sources at the deadline; late IPC replies cannot alter the next request.
+    request.timer = setTimeout(() => finish(true), SEARCH_SAFETY_TIMEOUT_MS);
+    await Promise.all(entries.map(async ([searchSource, state]) => {
+      let response;
+      try {
+        response = await window.electronAPI.searchSeriesMore(kw, { source: searchSource, channel: state.channel, cursor: state.cursor, page: state.page + 1 });
+      } catch (error) { response = { success: false, error: error.message }; }
+      if (moreRequest.current === request) request.responses.set(searchSource, response);
+    }));
+    finish();
+  };
+
+  const matchedCount = results ? results.filter(item => item.relevance < 2).length : 0;
+  const fuzzyCount = results ? results.filter(item => item.relevance === 2 && item.fuzzy).length : 0;
+  const otherCount = results ? results.filter(item => item.relevance === 2 && !item.fuzzy).length : 0;
 
   return (
     <div className="hongguo-card">
@@ -267,7 +352,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
 
       {results && results.length > 0 && (
         <>
-          <div className="search-count">找到 {results.filter(item => item.relevance < 2).length} 部标题匹配短剧{results.some(item => item.relevance === 2) ? `，另有 ${results.filter(item => item.relevance === 2).length} 部来源返回的其他结果（排在后面）` : ''}</div>
+          <div className="search-count">找到 {matchedCount} 部标题匹配短剧{fuzzyCount ? `，另有 ${fuzzyCount} 部补搜结果` : ''}{otherCount ? `，另有 ${otherCount} 部来源返回的其他结果（排在后面）` : ''}</div>
           <div className="search-grid">
             {results.map((item) => (
               <button
@@ -295,13 +380,21 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
                         <RefreshCw size={13} className="spin" /> 正在拉取分集…
                       </>
                     ) : (
-                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.relevance === 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
+                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.fuzzy ? '补搜结果 · 查看剧集' : item.relevance === 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
                     )}
                   </div>
                 </div>
               </button>
             ))}
           </div>
+          {Object.values(more).some(state => state.hasMore) && (
+            <div className="search-more">
+              <button type="button" className="btn btn-outline" disabled={moreLoading} onClick={loadMore}>
+                {moreLoading ? '加载中…' : '加载更多'}
+              </button>
+              {moreError && <span role="alert">{moreError}</span>}
+            </div>
+          )}
         </>
       )}
     </div>

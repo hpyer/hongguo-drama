@@ -30,8 +30,15 @@ class Notification extends EventEmitter {
 const electron = { app, Notification, ipcMain: { handle: (name, fn) => { handlers[name] = fn; } },
   protocol: { registerSchemesAsPrivileged() {} } };
 const native = { fetchEpisodeList: id => fetchDetail(id) };
+const hongguoSearch = { searchHongguo: async keyword => {
+  const result = await search(keyword);
+  if (!result?.success) throw new Error(result?.error || 'search unavailable');
+  const results = result.results || [];
+  return { results, total: results.length, page: 1, totalPages: 1, hasMore: false };
+} };
 const context = vm.createContext({ require: name => name === 'electron' ? electron
-  : name === './src/native/hongguo' ? native : name === './src/store' ? store : req(name),
+  : name === './src/native/hongguo' ? native : name === './src/store' ? store
+    : name === './src/native/hongguo-search' ? hongguoSearch : req(name),
   __dirname: path.dirname(file), process, Buffer, URL, Response, Request, Headers, AbortController,
   setTimeout, clearTimeout, console: { log() {}, warn() {}, error() {} } });
 vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
@@ -160,6 +167,21 @@ async function check(name, fn) {
     assert.equal(position.acknowledgedTotal, latest.acknowledgedTotal);
     assert.equal(position.unreadEpisodes, 2);
     assert.equal(position.sequels[0].series_id, sequel.series_id);
+  });
+  await check('refresh preserves a longer episode list registered during the network wait', async () => {
+    assert.equal((await ipc('save-playback-position', sid, 1, 10)).success, true);
+    const detail = deferred();
+    fetchDetail = () => detail.promise;
+    const refreshing = ipc('refresh-watch-history', true);
+    store.saveSeries(store.getSeries().map(item => item.series_id === sid ? series(5) : item));
+    context.loadSeriesRegistry();
+    detail.resolve(series(4));
+    const result = await refreshing;
+    assert.equal(result.checked, 1);
+    const saved = store.getSeries().find(item => item.series_id === sid);
+    assert.equal(saved.episodes.length, 5, 'a slow 4-episode refresh must not replace the newer 5-episode registry');
+    assert.equal((await rows())[0].total, 5);
+    assert.equal(store.getPlayback()[sid].knownTotal, 5, 'slower refresh must not roll back the known total');
   });
   await check('acknowledging an older snapshot leaves later discoveries unread', async () => {
     store.saveSettings({ root, watch_sequels_enabled: true });

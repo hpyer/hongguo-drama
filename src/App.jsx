@@ -121,7 +121,7 @@ export default function App() {
       case 'manager':
         return <DownloadManager active={page === id} onNavigate={navigate} />;
       case 'settings':
-        return <SettingsPage active={page === id} preview={appInfo?.preview} />;
+        return <SettingsPage active={page === id} preview={appInfo?.preview} appInfo={appInfo} />;
       case 'download':
       default:
         return <HongguoDownload active={page === id} onNavigate={navigate} />;

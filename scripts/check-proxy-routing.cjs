@@ -17,14 +17,19 @@ function realResolver(env) {
   vm.runInNewContext(fs.readFileSync(req.resolve('proxy-from-env'), 'utf8'), { module, exports: module.exports, process: { env }, URL });
   return module.exports.getProxyForUrl;
 }
-function load(env) {
+function load(env, initialSettings = { root }) {
   const handlers = {}, proxyCalls = [], requests = [], app = new EventEmitter();
+  let saved = structuredClone(initialSettings);
+  const store = {
+    getSettings: () => structuredClone(saved),
+    saveSettings: next => { saved = structuredClone(next); },
+  };
   Object.assign(app, { getVersion: () => 'test', getPath: () => root, commandLine: { appendSwitch() {} }, requestSingleInstanceLock: () => true, whenReady: () => ({ then() {} }) });
   const electron = { app, ipcMain: { handle: (name, fn) => handlers[name] = fn }, protocol: { registerSchemesAsPrivileged() {} }, session: { defaultSession: { setProxy: async config => proxyCalls.push(config) } } };
-  const context = vm.createContext({ require: name => name === 'electron' ? electron : name === './src/store' ? { getSettings: () => ({ root }) } : name === 'axios' ? { get: async (url, options) => { requests.push({ url, options }); return { status: 200 }; } } : req(name), __dirname: path.dirname(source), process: { ...process, env: { ...env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
+  const context = vm.createContext({ require: name => name === 'electron' ? electron : name === './src/store' ? store : name === 'axios' ? { get: async (url, options) => { requests.push({ url, options }); return { status: 200 }; } } : req(name), __dirname: path.dirname(source), process: { ...process, env: { ...env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
-  return { context, handlers, proxyCalls, requests };
+  return { context, handlers, proxyCalls, requests, session: electron.session.defaultSession, store, saved: () => structuredClone(saved) };
 }
 async function check(name, run) {
   try { await run(); console.log('PASS ' + name); }
@@ -81,6 +86,94 @@ async function check(name, run) {
       }
     }
   });
+  await check('invalid custom proxy is rejected before saving and does not change the active proxy', async () => {
+    const h = load({}, { root });
+    const before = h.saved(), sessions = h.proxyCalls.length;
+    const result = await h.handlers['save-settings']({}, { proxy_enabled: true, proxy_mode: 'custom', proxy_host: 'ftp://127.0.0.1', proxy_port: '21' });
+    assert.equal(result.success, false);
+    assert.match(result.error, /HTTP|HTTPS|SOCKS/);
+    assert.deepEqual(h.saved(), before, 'bad proxy must not be persisted');
+    assert.equal(h.proxyCalls.length, sessions, 'bad proxy must not be applied');
+  });
+  await check('a valid custom proxy is applied and saved', async () => {
+    const h = load({}, { root });
+    const result = await h.handlers['save-settings']({}, { proxy_enabled: true, proxy_mode: 'custom', proxy_host: '127.0.0.1', proxy_port: '19192' });
+    assert.equal(result.success, true, result.error);
+    assert.equal(h.saved().proxy_enabled, true);
+    assert.equal(h.proxyCalls.at(-1).mode, 'fixed_servers');
+  });
+  await check('a persisted invalid proxy starts in direct mode without rewriting settings', async () => {
+    const h = load({}, { root, proxy_enabled: true, proxy_mode: 'custom', proxy_host: 'ftp://127.0.0.1', proxy_port: '21' });
+    const before = h.saved();
+    const result = await h.context.applyProxyForStartup(h.context.getCurrentSettings());
+    assert.equal(result.fallback, true);
+    assert.equal(h.proxyCalls.at(-1).mode, 'direct');
+    assert.deepEqual(h.saved(), before, 'startup fallback must not rewrite the bad configuration');
+  });
+
+  await check('concurrent saves preserve the later auto-delete choice', async () => {
+    const h = load({}, { root, proxy_enabled: false, auto_delete_watched: true });
+    let release;
+    h.session.setProxy = async config => {
+      if (config.mode === 'fixed_servers') await new Promise(resolve => { release = resolve; });
+    };
+    const first = h.handlers['save-settings']({}, custom);
+    for (let i = 0; i < 20 && !release; i++) await Promise.resolve();
+    assert.equal(typeof release, 'function');
+    const second = h.handlers['save-settings']({}, { auto_delete_watched: false });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    release();
+    const results = await Promise.all([first, second]);
+    assert(results.every(result => result.success));
+    assert.equal(h.saved().auto_delete_watched, false, 'an older save must not restore auto-delete');
+    assert.equal(h.saved().proxy_enabled, true);
+  });
+
+  await check('a timed-out proxy cannot overwrite a completed direct fallback', async () => {
+    const h = load({});
+    let release, held = false;
+    h.session.setProxy = async config => {
+      if (config.mode === 'fixed_servers' && !held) {
+        held = true;
+        await new Promise(resolve => { release = resolve; });
+      }
+      h.proxyCalls.push(config);
+    };
+    await assert.rejects(h.context.applyProxyWithTimeout(custom, 5), /超时/);
+    await h.context.applyProxySettings({ proxy_enabled: false });
+    release();
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    assert.equal(h.context.process.env.HTTPS_PROXY, undefined, 'late custom work must not restore the environment proxy');
+    assert.equal(h.proxyCalls.at(-1).mode, 'direct', 'late native completion must restore the current route');
+  });
+
+  await check('startup fallback pauses automatic update network requests', async () => {
+    const h = load({});
+    vm.runInContext('proxyStartupFallback = true', h.context);
+    const result = await h.handlers['check-app-update']({});
+    assert.equal(result.enabled, false);
+    assert.equal(h.requests.length, 0, 'no automatic external request before the proxy is repaired');
+  });
+
+  await check('a hung native proxy save times out and releases the save queue', async () => {
+    const h = load({}, { root, proxy_enabled: false });
+    const apply = h.context.applyProxyWithTimeout;
+    h.context.applyProxyWithTimeout = settings => apply(settings, 5);
+    h.session.setProxy = async config => {
+      if (config.mode === 'fixed_servers') return new Promise(() => {});
+      h.proxyCalls.push(config);
+    };
+    let timer;
+    try {
+      const result = await Promise.race([h.handlers['save-settings']({}, custom),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('proxy save left the queue blocked')), 150); })]);
+      assert.equal(result.success, false);
+      assert.match(result.error, /超时/);
+      assert.equal(h.saved().proxy_enabled, false);
+      assert.equal((await h.handlers['save-settings']({}, { auto_delete_watched: false })).success, true);
+    } finally { clearTimeout(timer); }
+  });
+
   await check('custom overrides bypass, direct disables proxies, system restores exact env and Chromium system mode', async () => {
     const env = { HTTPS_PROXY: 'http://upper:80', https_proxy: '', HTTP_PROXY: '', NO_PROXY: '*', no_proxy: '' }, h = load(env);
     const route = realResolver(h.context.process.env);

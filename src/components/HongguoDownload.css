@@ -63,3 +63,15 @@
 .batch-quality-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .batch-quality-control .input-field { width: auto; max-width: 100%; min-height: 36px; }
 .batch-quality-hint { margin: 0 0 16px; }
+
+.search-more {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.search-more [role="alert"] {
+  color: var(--danger, #c0392b);
+  font-size: 12px;
+}

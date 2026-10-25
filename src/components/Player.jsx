@@ -1411,7 +1411,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
                 onClick={() => {
                   setConfirmAsk({
                     title: '删除全部本地文件',
-                    message: `将删除所有已下载的剧集文件，共 ${storageTotal.files} 个文件、${fmtSize(storageTotal.bytes)}。\n剧集列表与分集信息会保留，之后仍可在线播放或重新下载。`,
+                    message: `将删除所有已下载的剧集文件（包括已从剧库移除但保留的视频），共 ${storageTotal.files} 个文件、${fmtSize(storageTotal.bytes)}。\n剧集列表与分集信息会保留，之后仍可在线播放或重新下载。`,
                     okText: '全部删除',
                     danger: true,
                     onOk: async () => {

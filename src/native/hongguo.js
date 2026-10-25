@@ -176,12 +176,6 @@ function normalizeVideoUrl(raw) {
     .replace(/[?&]$/, '');
 }
 
-/** 从响应体里安全地取出某个字符串字段 */
-function pickJsonString(text, key) {
-  const m = text.match(new RegExp('"' + key + '"\\s*:\\s*"([^"]*)"'));
-  return m ? m[1].replace(/\\u002F/g, '/').replace(/\\u0026/g, '&') : '';
-}
-
 /** 拉取官网页面 HTML */
 async function fetchSiteHtml(url, timeout = 30000) {
   const res = await axios.get(url, {
@@ -204,20 +198,28 @@ async function fetchSiteHtml(url, timeout = 30000) {
  */
 async function fetchEpisodeListFromWeb(seriesId) {
   const html = await fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(seriesId)}`);
-
-  const m = html.match(/"vid_list"\s*:\s*\[([^\]]*)\]/);
-  if (!m) throw new Error('官网页面未找到分集数据（vid_list）');
-
-  const vids = m[1]
-    .split(',')
-    .map((s) => s.trim().replace(/^"|"$/g, ''))
-    .filter((s) => /^\d+$/.test(s));
+  const router = require('./catalog').readRouterData(html);
+  const data = router.loaderData?.['player_(series_id)/page']
+    ?? router.loaderData?.['player_(series_id)/(vid)/page'];
+  const detail = data?.seriesDetail;
+  // Read identity and episodes from the same current-player object, never recommendations.
+  if (!data || data.isSuccess === false || !/^\d{1,30}$/.test(String(detail?.series_id || '')) ||
+      String(detail.series_id) !== String(seriesId) ||
+      (data.series_id != null && String(data.series_id) !== String(seriesId))) {
+    throw new Error('官网返回的剧集与请求不一致或缺少剧集身份');
+  }
+  if (!Array.isArray(detail.vid_list)) throw new Error('官网页面未找到分集数据（vid_list）');
+  const vids = detail.vid_list.map(String);
+  if (vids.some(vid => !/^\d{1,30}$/.test(vid)) || new Set(vids).size !== vids.length) {
+    throw new Error('官网分集数据异常');
+  }
   if (!vids.length) throw new Error('官网分集列表为空');
 
-  const seriesTitle = pickJsonString(html, 'series_name') || '未命名短剧';
-  const cover = pickJsonString(html, 'series_cover');
-  const accessible = html.match(/"accessible_episode_cnt"\s*:\s*(\d+)/);
-  const webAccessibleEpisodes = accessible ? Math.min(Number(accessible[1]), vids.length) : null;
+  const seriesTitle = typeof detail.series_name === 'string' ? detail.series_name : '未命名短剧';
+  const cover = typeof detail.series_cover === 'string' ? detail.series_cover : '';
+  const accessible = detail.accessible_episode_cnt;
+  const webAccessibleEpisodes = accessible != null && /^\d+$/.test(String(accessible))
+    ? Math.min(Number(accessible), vids.length) : null;
 
   const episodes = vids.map((vid, i) => ({
     vid,
@@ -311,7 +313,27 @@ function shareHttpUrl(value, base) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096) {
     throw new Error('仅支持不含账号密码的 HTTP 或 HTTPS 分享链接');
   }
+  if (!isPublicMediaUrl(url.href)) throw new Error('分享链接必须指向公网 HTTP 或 HTTPS 地址');
   return url.href;
+}
+
+/** 直接从分享 URL 里取剧集编号；取到就不需要再发网络请求。 */
+function seriesIdFromShareUrl(value) {
+  let url;
+  try { url = new URL(value); } catch (_) { return ''; }
+  const direct = url.searchParams.get('video_series_id') || url.searchParams.get('series_id');
+  if (/^\d{1,30}$/.test(direct || '')) return direct;
+  const player = url.pathname.match(/^\/player\/(\d{1,30})(?:\/|$)/);
+  if (player) return player[1];
+  const scheme = url.searchParams.get('schemeParams');
+  if (scheme) {
+    try {
+      const raw = decodeURIComponent(scheme);
+      const match = raw.match(/"video_id"\s*:\s*"(\d{1,30})"/);
+      if (match) return match[1];
+    } catch (_) { /* 可选参数损坏时继续走页面解析 */ }
+  }
+  return '';
 }
 
 async function resolveSeriesId(shareUrl) {
@@ -323,9 +345,16 @@ async function resolveSeriesId(shareUrl) {
     return trimmed.toLowerCase();
   }
   if (/^\d{1,30}$/.test(trimmed)) return trimmed;
-  const link = trimmed.match(/https?:\/\/[^\s<>"'，。！？；、【】（）]+/i)?.[0];
-  if (!link) throw new Error('请输入有效的 HTTP 或 HTTPS 分享链接，或剧集 ID');
-  let finalUrl = shareHttpUrl(link.replace(/[),.;!]+$/, ''));
+  const linkPattern = /https?:\/\/[^\s<>"'，。！？；、【】（）]+/gi;
+  // An explicit ID outside URLs is local input; attached links need not be visited or validated.
+  const textId = trimmed.replace(linkPattern, ' ').match(/(?:^|[^A-Za-z0-9_])(?:video_)?series_id["']?\s*[:=]\s*["']?(\d{1,30})(?![A-Za-z0-9_])/i)?.[1];
+  if (textId) return textId;
+  const link = trimmed.match(linkPattern)?.[0];
+  let finalUrl = link ? shareHttpUrl(link.replace(/[),.;!]+$/, '')) : '';
+  // Decode URL values separately so encoded digits cannot be truncated by the text matcher.
+  const initialId = finalUrl ? seriesIdFromShareUrl(finalUrl) : '';
+  if (initialId) return initialId;
+  if (!finalUrl) throw new Error('请输入有效的 HTTP 或 HTTPS 分享链接，或剧集 ID');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   let bodyText;
@@ -348,28 +377,22 @@ async function resolveSeriesId(shareUrl) {
       if (res.status >= 300 && res.status < 400) {
         if (redirects >= 5) throw new Error('分享链接跳转次数过多');
         finalUrl = shareHttpUrl(res.headers.location, finalUrl);
+        const redirectId = seriesIdFromShareUrl(finalUrl);
+        if (redirectId) return redirectId;
         continue;
       }
       bodyText = typeof res.data === 'string' ? res.data : '';
       break;
     }
-  } catch (_) {
-    throw new Error(controller.signal.aborted ? '分享链接加载超时，请重试' : '分享链接加载失败，请检查链接后重试');
+  } catch (error) {
+    const reason = controller.signal.aborted
+      ? '分享链接加载超时，请重试'
+      : `分享链接加载失败：${error.message || '请检查链接后重试'}`;
+    throw new Error(reason);
   } finally { clearTimeout(timer); }
 
-  const url = new URL(finalUrl);
-  const seriesId = url.searchParams.get('video_series_id');
-  if (/^\d{1,30}$/.test(seriesId || '')) return seriesId;
-  const player = url.pathname.match(/^\/player\/(\d{1,30})(?:\/|$)/);
-  if (player) return player[1];
-  const schemeParams = url.searchParams.get('schemeParams');
-  if (schemeParams) {
-    try {
-      const raw = decodeURIComponent(schemeParams);
-      const match = raw.match(/"video_id"\s*:\s*"(\d{1,30})"/);
-      if (match) return match[1];
-    } catch (_) { /* Malformed optional parameters must not hide valid page data. */ }
-  }
+  const urlId = seriesIdFromShareUrl(finalUrl);
+  if (urlId) return urlId;
   const match = bodyText.match(/video_series_id=(\d{1,30})(?!\d)/)
     || bodyText.match(/"(?:video_id|series_id)"\s*:\s*"(\d{1,30})"/);
   if (match) return match[1];
@@ -408,12 +431,20 @@ async function fetchEpisodeListFresh(seriesId) {
     throw new Error("detail API 失败: " + JSON.stringify(j || {}).slice(0, 200));
   }
   const d = j.data || {};
-  const sid = Object.keys(d)[0];
+  const requested = String(seriesId);
+  // Never take the first key from an object: a mismatched response must fail closed.
+  const sid = Object.prototype.hasOwnProperty.call(d, requested) ? requested : '';
   if (!sid) {
-    throw new Error("未获取到剧集数据");
+    throw new Error("备用接口返回的剧集与请求不一致");
   }
   const vd = d[sid]?.video_data || {};
+  if (vd.series_id && String(vd.series_id) !== sid) {
+    throw new Error("备用接口返回的剧集与请求不一致");
+  }
   const vl = vd.video_list || [];
+  if (vl.some(item => item?.series_id && String(item.series_id) !== sid)) {
+    throw new Error("备用接口返回了其他剧集的分集");
+  }
   const eps = vl.map((item) => ({
     vid: String(item.vid),
     vid_index: item.vid_index || 0,

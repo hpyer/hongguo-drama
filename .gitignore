@@ -1,4 +1,4 @@
-# 红果短剧 3.3：公开源码排除依赖、构建产物与本地运行资料。
+# 红果短剧 3.4 源码候选：公开源码排除依赖、构建产物与本地运行资料。
 
 # 依赖
 node_modules/
@@ -54,6 +54,11 @@ settings.json
 *.session*
 data.json
 danmaku-client.json
+/data/
+/sessions/
+.migration-incomplete
+*.importing
+*.db-*
 downloads/
 logs/
 outputs/
@@ -83,3 +88,9 @@ dist-local/
 HANDOFF.md
 
 .local/
+.tokensave/
+.venv/
+venv/
+__pycache__/
+*.pyc
+backups/

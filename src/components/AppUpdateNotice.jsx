@@ -43,7 +43,7 @@ export default function AppUpdateNotice() {
         enabled.current = result?.enabled === true;
         if (!enabled.current) {
           setRelease(null);
-          if (requestedManually.current) setError('更新检测已关闭，请在设置中开启并保存后重试。');
+          if (requestedManually.current) setError(result?.error || '更新检测已关闭，请在设置中开启并保存后重试。');
           else setVisible(false);
           return;
         }

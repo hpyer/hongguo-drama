@@ -9,11 +9,14 @@ const videoEnhancementStub = {
 };
 const shortcutModule = { exports: {} };
 vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../src/shortcuts.js'), 'utf8'), { loader: 'js', format: 'cjs' }).code, { module: shortcutModule, exports: shortcutModule.exports });
+const displayModule = { exports: {} };
+vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../src/playerDisplay.mjs'), 'utf8'), { loader: 'js', format: 'cjs' }).code, { module: displayModule, exports: displayModule.exports });
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/PlayerControls.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
 (async () => {
   const slots = [], effects = [], cleanups = [], listeners = new Map(), documentListeners = new Map(), stageListeners = new Map(), windowListeners = new Map(), timers = new Map();
   let nextTimer = 0, keyboardFocus = false, now = 0, blurs = 0;
+  class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const advance = (milliseconds = 1000) => {
     const until = now + milliseconds;
     for (;;) {
@@ -44,7 +47,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     else if (document.fullscreenElement === stage) await document.exitFullscreen();
     else await stage.requestFullscreen();
   };
-  const context = { module: { exports: {} }, document, Date: { now: () => now }, window: { addEventListener: (name, fn) => windowListeners.set(name, fn), removeEventListener: name => windowListeners.delete(name) }, setTimeout: (fn, delay) => { timers.set(++nextTimer, { fn, at: now + delay }); return nextTimer; }, clearTimeout: id => timers.delete(id), require: name => name === 'react' ? react : name === '../shortcuts' ? shortcutModule.exports : name === './VideoEnhancement' ? videoEnhancementStub : {} };
+  const context = { module: { exports: {} }, document, Date: TestDate, window: { addEventListener: (name, fn) => windowListeners.set(name, fn), removeEventListener: name => windowListeners.delete(name) }, setTimeout: (fn, delay) => { timers.set(++nextTimer, { fn, at: now + delay }); return nextTimer; }, clearTimeout: id => timers.delete(id), setInterval: (fn, delay) => { timers.set(++nextTimer, { fn, at: now + delay }); return nextTimer; }, clearInterval: id => timers.delete(id), require: name => name === 'react' ? react : name === '../shortcuts' ? shortcutModule.exports : name === '../playerDisplay.mjs' ? displayModule.exports : name === './VideoEnhancement' ? videoEnhancementStub : {} };
   context.exports = context.module.exports; vm.runInNewContext(source, context);
   const nodes = () => { const out = []; const visit = node => { if (!node || typeof node !== 'object') return; out.push(node); node.children?.forEach(visit); }; visit(tree); return out; };
   const find = label => nodes().find(node => node.props['aria-label'] === label);
@@ -80,6 +83,8 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   media.videoWidth = 640; media.videoHeight = 360; listeners.get('loadedmetadata')(); render();
   const nodeText = node => typeof node === 'string' || typeof node === 'number' ? String(node) : node?.children?.map(nodeText).join('') || '';
   assert.match(nodeText(find('当前播放信息')), /测试剧.*第 1 集/, 'fullscreen title includes series and episode');
+  assert.match(nodeText(find('当前播放信息')), /当前画面 360P（640 × 360）/, 'fullscreen title shows the actual picture size');
+  assert.ok(nodes().some(node => node.type === 'time' && /^当前时间 \d{2}:\d{2}$/.test(node.props['aria-label'] || '')), 'fullscreen status bar shows the current time');
   find('选集').props.onClick(); render();
   assert.ok(find('选集面板')); assert.equal(find('播放第 1 集').props['aria-current'], 'true');
   assert.equal(find('播放第 3 集').props.disabled, true);

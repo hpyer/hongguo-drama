@@ -54,11 +54,30 @@ const run = code => vm.runInContext(code,context);
   let ready;
   updateSession.setProxy = () => new Promise(resolve=>{ready=resolve;});
   settings = {...settings,proxy_port:7891};
+  run('sessionProxyConfigs.delete(appUpdater.netSession)');
   const preparing = handlers['download-app-update']({});
   await handlers['cancel-app-update']({});
   ready();
   assert.equal((await preparing).success,false,'cancel during proxy preparation must prevent starting a download');
   assert.equal(downloads,1);
   assert.equal(checks,1,'cancel during preparation must prevent updater network access');
+
+  updateSession.setProxy = async config => { updateSession.calls.push(config); };
+  let releaseWindow;
+  windowSession.setProxy = async config => {
+    if (config.proxyRules === 'http://127.0.0.1:7892') await new Promise(resolve => { releaseWindow = resolve; });
+    windowSession.calls.push(config);
+  };
+  const changing = context.applyProxySettings({ ...settings, proxy_port: 7892 });
+  for (let i = 0; i < 20 && !releaseWindow; i++) await Promise.resolve();
+  assert.equal(typeof releaseWindow, 'function');
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  updater.checkForUpdates = async () => {
+    assert.equal(updateSession.calls.at(-1).proxyRules, 'http://127.0.0.1:7892', 'update traffic must follow the pending current choice, not stale persisted settings');
+    return { updateInfo: { version: '2.0.0' }, cancellationToken: { cancel() {} } };
+  };
+  try {
+    assert.equal((await handlers['download-app-update']({})).success, true, 'update session must retain the current proxy during save');
+  } finally { releaseWindow(); await changing; }
   console.log('PASS update proxy: applied before download, connection reset, credential boundary, direct/system switching');
 })().catch(error=>{console.error(error);process.exitCode=1});

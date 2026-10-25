@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-export default function SequelFinder({ seriesId, active = true }) {
+export default function SequelFinder({ seriesId, active = true, timeoutMs = 25000 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
@@ -9,24 +9,38 @@ export default function SequelFinder({ seriesId, active = true }) {
   const [opening, setOpening] = useState('');
   const request = useRef(0);
   const openingRef = useRef(false);
+  const timer = useRef(0);
+  const clearTimer = () => { if (timer.current) { clearTimeout(timer.current); timer.current = 0; } };
 
   useEffect(() => {
     request.current++;
     openingRef.current = false;
+    clearTimer();
     setOpen(false); setLoading(false); setOpening(''); setResults([]); setError(''); setPartial(false);
-    return () => { request.current++; openingRef.current = false; };
+    return () => { request.current++; openingRef.current = false; clearTimer(); };
   }, [seriesId, active]);
 
   const close = () => {
     request.current++;
     openingRef.current = false;
+    clearTimer();
     setOpen(false); setLoading(false); setOpening('');
   };
 
   const find = async () => {
     if (!active || !seriesId || openingRef.current) return;
     const version = ++request.current;
+    clearTimer();
     setOpen(true); setLoading(true); setError(''); setPartial(false); setResults([]);
+    // 主进程查询可能因为站点页面卡住而长时间不返回；前端兜底，避免一直转圈。
+    const timerId = setTimeout(() => {
+      if (version !== request.current) return;
+      if (timer.current === timerId) timer.current = 0;
+      request.current++;
+      setLoading(false);
+      setError('查询超时，请稍后重试。');
+    }, Math.max(1, Number(timeoutMs) || 25000));
+    timer.current = timerId;
     try {
       const local = await window.electronAPI.findSeriesSequels(seriesId, { localOnly: true });
       if (version !== request.current) return;
@@ -43,7 +57,11 @@ export default function SequelFinder({ seriesId, active = true }) {
       setError(result.error || '');
     } catch (failure) {
       if (version === request.current) setError(failure.message || '查询失败，请重试');
-    } finally { if (version === request.current) setLoading(false); }
+    } finally {
+      // 只清理本次查询自己的计时器；旧请求晚到不能打断新查询的超时保护。
+      if (timer.current === timerId) { clearTimeout(timerId); timer.current = 0; }
+      if (version === request.current) setLoading(false);
+    }
   };
 
   const play = async (sequel) => {

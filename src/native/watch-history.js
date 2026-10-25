@@ -37,7 +37,8 @@ function recordPlayback(previous, series, index, time, now = Date.now(), metadat
 }
 
 function applyEpisodeUpdate(record, oldSeries, freshSeries, now = Date.now()) {
-  const baseline = record.knownTotal ?? totalEpisodes(oldSeries);
+  // Never roll back a newer cached episode list just because a slower refresh returned less.
+  const baseline = Math.max(Number(record.knownTotal) || 0, totalEpisodes(oldSeries));
   const knownTotal = Math.max(baseline, totalEpisodes(freshSeries));
   const acknowledgedTotal = record.acknowledgedTotal ?? baseline;
   return { ...record, knownTotal, acknowledgedTotal,

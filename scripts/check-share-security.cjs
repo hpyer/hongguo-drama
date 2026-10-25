@@ -17,12 +17,32 @@ async function main() {
       'javascript:alert(1)', '//example.com/a', 'https://user:secret@example.com/',
       'x'.repeat(8193), 'https://example.com/' + 'x'.repeat(4096), '1'.repeat(31), {},
       'http://127.0.0.1/', 'http://2130706433/', 'http://0x7f000001/', 'http://10.0.0.1/',
-      'http://169.254.169.254/', 'http://[::ffff:127.0.0.1]/', 'http://[fd00::1]/', 'http://nas.local/']) {
+      'http://169.254.169.254/', 'http://[::ffff:127.0.0.1]/', 'http://[fd00::1]/', 'http://nas.local/',
+      'http://127.0.0.1/player/12345678', 'http://nas.local/?series_id=12345678',
+      'https://user:secret@example.com/detail?series_id=12345678']) {
       calls.length = 0;
       await assert.rejects(resolveSeriesId(input));
       assert.equal(calls.length, 0, 'invalid input must never reach axios');
     }
     assert.equal(await resolveSeriesId(' 1234567890 '), '1234567890');
+    calls.length = 0;
+    assert.equal(await resolveSeriesId('https://hongguoduanju.com/player/7673067074104593432'), '7673067074104593432');
+    assert.equal(await resolveSeriesId('https://hongguoduanju.com/detail?series_id=7673067074104593432'), '7673067074104593432');
+    assert.equal(await resolveSeriesId('https://hongguoduanju.com/detail?series_id=1234567%38'), '12345678');
+    assert.equal(await resolveSeriesId('看这里 http://127.0.0.1/private series_id=12345678'), '12345678');
+    assert.equal(await resolveSeriesId('https://user:secret@example.com/path series_id=12345678'), '12345678');
+    assert.equal(await resolveSeriesId('series_id=999 看剧 https://hongguoduanju.com/detail?series_id=1234567%38'), '999', 'an explicit ID outside URLs needs no URL request or validation');
+    assert.equal(await resolveSeriesId('看剧点这里 https://example.com/share/abc ，series_id=7673067074104593432'), '7673067074104593432');
+    assert.equal(calls.length, 0, 'a series id already present in the URL or share text must not need a network request');
+    calls.length = 0;
+    for (const input of ['not_series_id=1234567', 'not_video_series_id=1234567', 'series_id=' + '1'.repeat(31), 'series_id=123456789012345678901234567890abc']) {
+      await assert.rejects(resolveSeriesId(input), undefined, input);
+      assert.equal(calls.length, 0, 'invalid or unrelated keys must not trigger a request');
+    }
+    assert.equal(await resolveSeriesId('series_id=' + '1'.repeat(30)), '1'.repeat(30));
+    assert.equal(await resolveSeriesId('video_series_id=1234567890'), '1234567890');
+    assert.equal(await resolveSeriesId('"series_id":"1234567890"'), '1234567890');
+    assert.equal(calls.length, 0);
     calls.length = 0;
     assert.equal(await resolveSeriesId('推荐好剧，点击 https://example.com/share/abc 观看全集'), '123');
     assert.equal(calls[0].url, 'https://example.com/share/abc');
@@ -34,7 +54,8 @@ async function main() {
 
     for (const location of ['data:text/plain,123', 'file:///tmp/test', 'https://user:secret@example.com/',
       'https://example.com/' + 'x'.repeat(4096), 'http://127.0.0.1/private', '//192.168.1.1/private',
-      'http://[::ffff:10.0.0.1]/', 'http://localhost./']) {
+      'http://[::ffff:10.0.0.1]/', 'http://localhost./', 'http://127.0.0.1/player/12345678',
+      'https://user:secret@example.com/detail?series_id=12345678']) {
       calls.length = 0;
       axios.get = async url => { calls.push(url); return { status: 302, headers: { location }, data: '' }; };
       await assert.rejects(resolveSeriesId('https://example.com/short'));
@@ -44,10 +65,10 @@ async function main() {
     axios.get = async url => {
       calls.push(url);
       return url.endsWith('/short') ? { status: 302, headers: { location: '/player/456' }, data: '' }
-        : { status: 200, headers: {}, data: '{"series_id":"456"}' };
+        : (() => { throw new Error('target page unavailable'); })();
     };
     assert.equal(await resolveSeriesId('https://example.com/short'), '456');
-    assert.equal(calls[1], 'https://example.com/player/456');
+    assert.deepEqual(calls, ['https://example.com/short'], 'a safe redirect with an ID must not fetch the target page');
     calls.length = 0;
     axios.get = async url => { calls.push(url); return { status: 302, headers: { location: '/loop' }, data: '' }; };
     await assert.rejects(resolveSeriesId('https://example.com/loop'));
@@ -102,7 +123,7 @@ async function main() {
         : { status: 200, headers: {}, data: '<html>official player fixture</html>' };
     };
     assert.equal(await resolveSeriesId('分享短剧 https://v.fqnovel.com/fixture/'), '7123456789012345678');
-    assert.equal(connected.length, 2);
+    assert.equal(connected.length, 1);
     for (const answers of [[{ address: '192.168.1.1', family: 4 }],
       [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.1', family: 4 }],
       [{ address: '::ffff:127.0.0.1', family: 6 }]]) {

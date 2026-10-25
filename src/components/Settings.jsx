@@ -45,7 +45,7 @@ function describeProxy(settings) {
   return { on: true, text: '接口/下载跟随启动环境，浏览器跟随系统' };
 }
 
-function SettingsPage({ active = true, preview = false }) {
+function SettingsPage({ active = true, preview = false, appInfo = null }) {
   const danmakuSource = useDanmakuSource();
   const [settings, setSettings] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -68,13 +68,35 @@ function SettingsPage({ active = true, preview = false }) {
     catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
   };
 
-  useEffect(() => {
-    loadSettings();
-    return () => { testVersion.current++; clearTimeout(savedTimer.current); };
-  }, []);
+  // 重新进入设置页时同步播放器里刚改过的共享选项；保留用户未保存的字段。
+  const refreshSettings = async () => {
+    if (savingRef.current) return;
+    try {
+      const fresh = { download_quality: 'auto', ...await window.electronAPI.getSettings() };
+      setSettings(prev => {
+        if (!prev || !editedKeys.current.size) return fresh;
+        const merged = { ...fresh };
+        for (const key of editedKeys.current) {
+          if (Object.hasOwn(prev, key)) merged[key] = prev[key];
+        }
+        return merged;
+      });
+      setLoadError('');
+    } catch (error) {
+      setLoadError(error.message || '设置加载失败，请重试');
+    }
+  };
+
+  useEffect(() => () => { testVersion.current++; clearTimeout(savedTimer.current); }, []);
 
   useEffect(() => {
-    if (!active) { testVersion.current++; setTesting(false); setTestResult(null); }
+    if (!active) {
+      testVersion.current++;
+      setTesting(false);
+      setTestResult(null);
+      return;
+    }
+    void refreshSettings();
   }, [active]);
 
   const update = (key, value) => {
@@ -100,7 +122,7 @@ function SettingsPage({ active = true, preview = false }) {
     setSaveError('');
     try {
       // Submit only edited fields; the main process merges newer playback options.
-      const editable = ['root', 'name_format', 'download_quality', 'cache_next_episode', 'compat_mode', 'auto_delete_watched', 'show_danmaku_controls', 'max_concurrent', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'app_updates_enabled'];
+      const editable = ['root', 'name_format', 'download_quality', 'cache_next_episode', 'compat_mode', 'auto_delete_watched', 'show_danmaku_controls', 'max_concurrent', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'app_updates_enabled'];
       const submitted = {};
       for (const key of editable) {
         if (Object.hasOwn(next, key) && (editedKeys.current.has(key) || isProxy && key.startsWith('proxy_'))) submitted[key] = next[key];
@@ -198,6 +220,7 @@ function SettingsPage({ active = true, preview = false }) {
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.cache_next_episode !== false} onChange={event => update('cache_next_episode', event.target.checked)} /><span className="proxy-switch-text">缓存下一集<em>开始播放后预缓存下一集，减少切集等待；会使用网络流量。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.compat_mode !== false} onChange={event => update('compat_mode', event.target.checked)} /><span className="proxy-switch-text">自动兼容模式<em>无法解码时尝试转码播放，解决部分黑屏有声问题。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.auto_delete_watched === true} onChange={event => update('auto_delete_watched', event.target.checked)} /><span className="proxy-switch-text">看完自动删除<em>看完一集后删除该集已下载的视频、在线播放缓存和转码缓存。下载文件会永久删除；需要时可重新下载。保存后生效。</em></span></label>
+          <label className="proxy-switch-row"><input type="checkbox" aria-label="启用红果 App 搜索" checked={settings.search_app_enabled === true} onChange={event => update('search_app_enabled', event.target.checked)} /><span className="proxy-switch-text">实验：红果 App 搜索<em>优先使用 App 搜索接口，失败或空结果自动回退官网；接口可能受上游风控影响。</em></span></label>
         </div>
         <div className="settings-group">
           <span className="settings-label">弹幕按钮设置</span>
@@ -316,6 +339,16 @@ function SettingsPage({ active = true, preview = false }) {
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.watch_updates_enabled !== false} onChange={event => update('watch_updates_enabled', event.target.checked)} /><span className="proxy-switch-text">自动检查新集<em>应用运行期间，每部剧约 6 小时检查一次；列表较多时分批检查</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.watch_sequels_enabled !== false} onChange={event => update('watch_sequels_enabled', event.target.checked)} /><span className="proxy-switch-text">查找疑似新一季<em>约每天按剧名搜索一次，仅提示同名且季数更高的剧；可能遗漏或误报</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.watch_notifications_enabled === true} onChange={event => update('watch_notifications_enabled', event.target.checked)} /><span className="proxy-switch-text">发送系统通知<em>默认关闭。开启后还需允许 macOS 通知；关闭不影响观看记录红点</em></span></label>
+        </div>
+
+        <div className="settings-group">
+          <span className="settings-label">配置文件位置</span>
+          <p className="settings-hint settings-path"><code>{appInfo?.dataDir || '系统配置目录'}</code></p>
+          {appInfo?.configNote
+            ? <p className="settings-hint" role="status">{appInfo.configNote}</p>
+            : <p className="settings-hint">{appInfo?.configMode === 'portable'
+              ? '便携版：设置、下载记录与界面数据保存在程序目录的 data 文件夹；从旧版本切换时，原系统目录里的搜索历史不会自动带入。移动或备份程序时请连同该文件夹一起保留。'
+              : '设置、下载记录与界面数据保存在系统用户目录；更换电脑时可复制这个文件夹。'}</p>}
         </div>
 
         {preview ? <>

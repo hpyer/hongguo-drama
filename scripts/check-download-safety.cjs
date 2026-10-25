@@ -9,7 +9,7 @@ const { createRequire } = require('node:module');
 const source = path.resolve(__dirname, '../main.js'), req = createRequire(source);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-safety-'));
 let serial = 0, failures = 0;
-function load(settings = {}, overrides = {}, env = process.env) {
+function load(settings = {}, overrides = {}, env = process.env, options = {}) {
   const dir = path.join(root, String(++serial)); fs.mkdirSync(dir);
   const handlers = {}, app = new EventEmitter(), opened = [], proxyCalls = [];
   let stored = { root: dir, ...settings };
@@ -19,12 +19,13 @@ function load(settings = {}, overrides = {}, env = process.env) {
     shell: { showItemInFolder: target => { opened.push(target); }, openPath: async target => { opened.push(`open:${target}`); return ''; } },
     session: { defaultSession: { setProxy: async options => { proxyCalls.push(options); } } },
   };
-  const store = { getSettings: () => ({ ...stored }), saveTasks() {}, saveSeries() {}, saveMergeTasks() {}, saveSettings(next) { stored = { ...next }; } };
+  const store = { getSettings: () => ({ ...stored }), saveTasks() { if (options.failSaveTasks) throw new Error('disk full'); }, saveSeries() {}, saveMergeTasks() {}, saveSettings(next) { stored = { ...next }; } };
   const context = vm.createContext({ require: name => overrides[name] || (name === 'electron' ? electron : name === './src/store' ? store : req(name)), __dirname: path.dirname(source), process: { ...process, env: { ...env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   const pump = context.pumpQueue;
   context.pumpQueue = () => {}; // Inspect queued destinations without fetching media.
+  context.processDownloadQueue = () => {};
   return { app, context, handlers, dir, pump, opened, proxyCalls, settings: () => stored, run: code => vm.runInContext(code, context), set(name, value) { context.fixture = value; vm.runInContext(`${name} = fixture`, context); } };
 }
 function task(id, dir, status = 'completed', filename = `${id}.mp4`, index = 1) {
@@ -248,6 +249,18 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
       } finally { h.context.clearSourceRetry(retry); }
     }
   });
+  await check('retry and resume roll back task state when queue persistence fails', async () => {
+    for (const channel of ['retry-task', 'retry-tasks', 'resume-all']) {
+      const h = load({}, {}, process.env, { failSaveTasks: true });
+      const one = task('one', h.dir, 'failed');
+      h.set('downloadTasks', [one]); h.set('downloadQueue', []);
+      const result = channel === 'retry-task' ? await h.handlers[channel]({}, 'one')
+        : channel === 'retry-tasks' ? await h.handlers[channel]({}, ['one']) : await h.handlers[channel]({});
+      assert.equal(result.success, false, channel);
+      assert.equal(h.run('downloadTasks[0].status'), 'failed', `${channel} must restore status`);
+      assert.equal(h.run('downloadQueue.length'), 0, `${channel} must not leave a ghost queue entry`);
+    }
+  });
   await check('shared directory ignores unregistered episode names from templates without the series title', async () => {
     for (const name_format of ['集数', '标题', '{vid_index}']) {
       const h = load({ name_format }), entries = series(); entries[0].episodes[0].title = 'Shared'; h.set('seriesRegistry', entries);
@@ -255,7 +268,7 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
       const ambiguous = path.join(dir, h.context.uniqueEpisodeFilename({ name_format }, 'Short', entries[0].episodes[0])); file(ambiguous);
       const foreign = task('other', dir, 'completed', 'Other 009.mp4'); foreign.hongguoInfo.series_id = 'OTHER'; foreign.hongguoInfo.series_title = 'Other'; h.set('downloadTasks', [foreign]);
       assert.equal(h.context.collectSeriesEpisodeFiles('S', 'Short').ordered.length, 0, name_format);
-      const usage = (await h.handlers['get-storage-usage']({})).series[0]; assert.equal(usage.files, 0, name_format);
+      const usage = (await h.handlers['get-storage-usage']({})).series.find(item => item.series_id === 'S'); assert.equal(usage.files, 0, name_format);
       assert.equal((await h.handlers['delete-series-files']({}, 'S')).count, 0, name_format); assert.equal(fs.existsSync(ambiguous), true);
     }
   });
@@ -263,7 +276,7 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     const h = load(); h.set('seriesRegistry', series());
     const own = task('one', h.dir), foreign = { ...own, id: 'foreign', hongguoInfo: { ...own.hongguoInfo, series_id: 'OTHER' } }; file(own.savePath); h.set('downloadTasks', [own, foreign]);
     assert.equal(h.context.collectSeriesEpisodeFiles('S', 'Short').ordered.length, 0);
-    assert.equal((await h.handlers['get-storage-usage']({})).series[0].files, 0);
+    assert.equal((await h.handlers['get-storage-usage']({})).series.find(item => item.series_id === 'S').files, 0);
     assert.equal((await h.handlers['delete-series-files']({}, 'S')).count, 0); assert.equal(fs.existsSync(own.savePath), true);
   });
   await check('task deletion preserves shared, active and merged file families', async () => {

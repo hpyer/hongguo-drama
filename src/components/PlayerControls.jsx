@@ -4,6 +4,7 @@ import './PlayerControls.css';
 import { DEFAULT_SHORTCUTS, SHORTCUT_ACTIONS, formatShortcut, ignoresPlaybackShortcut, shortcutKey } from '../shortcuts';
 import { VideoEnhancementControls } from './VideoEnhancement';
 import { DanmakuSettings } from './CommentDanmaku';
+import { formatClock, formatQualityMeta } from '../playerDisplay.mjs';
 
 const formatTime = seconds => {
   const value = Math.max(0, Math.floor(seconds || 0));
@@ -14,6 +15,7 @@ const Icon = ({ children }) => <svg width="18" height="18" viewBox="0 0 24 24" f
 export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAULT_SHORTCUTS, onToggleFullscreen, videoRef, stageRef, source, available, continuing = false, autoContinue = false, rate, onRateChange, onError, pictureMode = 'fit', onPictureModeChange, portrait = false, windowFill = false, onWindowFill, seriesTitle = '', episodes = [], currentIndex, onEpisodeChange, onlineQuality = 'auto', supportsOnlineQuality = false, onQualityChange, onOpenSettings }) {
   const [media, setMedia] = useState({ paused: true, ended: false, time: 0, duration: 0, muted: false, volume: 1 });
   const [fullscreen, setFullscreen] = useState(false);
+  const [clock, setClock] = useState(() => formatClock());
   const [menuOpen, setMenuOpen] = useState(false);
   const [danmakuOpen, setDanmakuOpen] = useState(false);
   const [selectionPanel, setSelectionPanel] = useState(null);
@@ -167,6 +169,14 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   }, [stageRef]);
 
   useEffect(() => {
+    if (!expanded) return;
+    setClock(formatClock());
+    // 只到分钟，15 秒刷新一次即可，不随播放进度重渲染。
+    const timer = setInterval(() => setClock(formatClock()), 15000);
+    return () => clearInterval(timer);
+  }, [expanded]);
+
+  useEffect(() => {
     if (!menuOpen) return;
     speedRef.current?.focus();
     const outside = event => { if (!menuRef.current?.contains(event.target)) setMenuOpen(false); };
@@ -258,8 +268,10 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
 
   return (
     <div className={`player-controls ${controlsHidden ? 'controls-hidden' : ''}`} role="group" aria-label="视频播放控制">
-      {expanded && seriesTitle && <div className="player-now-playing" aria-label="当前播放信息">
-        <strong title={seriesTitle}>{seriesTitle}</strong><span>第 {currentIndex} 集</span>
+      {expanded && <div className="player-now-playing" aria-label="当前播放信息">
+        <div className="player-now-title"><strong title={seriesTitle}>{seriesTitle || '正在播放'}</strong><span>第 {currentIndex} 集</span></div>
+        <div className="player-now-meta">{formatQualityMeta(media.width, media.height)}</div>
+        <time className="player-clock" dateTime={clock} aria-label={`当前时间 ${clock}`}>{clock}</time>
       </div>}
       <div ref={controlsRef} className="player-controls-bar">
       <input className="player-controls-seek" type="range" aria-label="播放进度" aria-valuetext={`${formatTime(media.time)} / ${formatTime(media.duration)}`} min="0" max={media.duration || 0} step="0.1" value={Math.min(media.time, media.duration)} disabled={!available || !media.duration} onChange={seek} />

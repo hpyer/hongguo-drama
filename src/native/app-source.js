@@ -12,7 +12,9 @@ const localId = () => String(1000000000000000n + BigInt('0x' + crypto.randomByte
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
+const SEARCH_API = 'https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v';
 const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
+const SEARCH_UA = 'com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)';
 const DEVICE = {
     ac: 'wifi', channel: 'update_64', aid: '8662', app_name: 'novelread',
     version_code: '71332', version_name: '7.1.3.32', device_platform: 'android', os: 'android',
@@ -139,6 +141,44 @@ function signedVideoRequest(payload) {
     };
     return { url, headers, body };
 }
+function parseSearchInteger(value) {
+    if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value.trim()))) return null;
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+function signedSearchRequest({ keyword, page = 1, cursor = null } = {}) {
+    const pg = parseSearchInteger(page);
+    if (pg === null || pg < 1 || pg > 50) throw Object.assign(new Error('App 搜索页码需为 1 至 50 的整数'), { code: 'APP_INPUT' });
+    // Search uses the hongguoTV 7.2.2.32 profile and only hash branch 0.
+    const device = { ...DEVICE, version_code: '72232', version_name: '7.2.2.32', manifest_version_code: '72232',
+        update_version_code: '72232', pv_player: '72232', iid: localId(), device_id: localId() };
+    const khronos = Math.floor(Date.now() / 1000), ticketBase = Date.now();
+    const base = { ...device, query: String(keyword || '').slice(0, 80), count: '20', tab_type: '11',
+        bookshelf_search_plan: '4', use_correct: 'true', user_is_login: '0' };
+    if (cursor?.search_id) base.search_id = cursor.search_id;
+    if (cursor?.passback) base.passback = cursor.passback;
+    const offset = parseSearchInteger(cursor?.next_offset) ?? (pg - 1) * 20;
+    base.offset = String(offset);
+    let requestTicket = ticketBase, query = '', url = '';
+    for (let n = 0; n < 128; n += 1) {
+        requestTicket = ticketBase + n;
+        query = pythonUrlEncode({ ...base, ts: String(khronos), _rticket: String(requestTicket) });
+        url = `${SEARCH_API}?${query}`;
+        if (branchOf(url, null, khronos) === 0) break;
+        if (n === 127) throw new Error('无法生成搜索请求签名');
+    }
+    const random = Math.floor(Math.random() * 65536);
+    const headers = {
+        'User-Agent': SEARCH_UA, Accept: 'application/json; charset=utf-8,application/x-protobuf',
+        'x-ss-req-ticket': String(requestTicket), 'x-tt-request-tag': 't=0;n=0', 'sdk-version': '2',
+        'passport-sdk-version': '50561', 'x-xs-from-web': '0', 'x-khronos': String(khronos),
+        'x-ladon': be32(khronos).toString('base64'), 'x-argus': le32(khronos).toString('base64'),
+        'x-gorgon': xGorgon(query, null, khronos, random), 'x-helios': helios(khronos),
+        'x-medusa': buildMedusa(url, null, khronos, device), 'x-tt-dt': '',
+    };
+    return { url, headers };
+}
+
 function parseFallback(value) {
     if (typeof value === 'string') { const parsed = jsonBody(value); return parsed?.fallback_api || value; }
     if (Array.isArray(value)) return str(value[0]);
@@ -300,4 +340,4 @@ async function fetchAppPlayUrl(vid, options = {}) {
         : Object.assign(new Error('本集片源地址或密钥无法解析'), { code: 'INVALID_RESPONSE' });
 }
 
-module.exports = { fetchAppPlayUrl };
+module.exports = { fetchAppPlayUrl, signedSearchRequest, parseSearchInteger, requestJson, SEARCH_API, SEARCH_UA };

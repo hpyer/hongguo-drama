@@ -25,7 +25,7 @@ function load(ownsLock, preview = false, options = {}) {
   Object.assign(app, {
     getVersion: () => 'test', getPath: name => name === 'userData' ? userData : '/tmp',
     setName() {}, setPath: (name, value) => { if (name === 'userData') userData = value; },
-    commandLine: { appendSwitch() {}, hasSwitch: name => { assert.equal(name, 'user-data-dir'); return false; } },
+    commandLine: { appendSwitch() {}, hasSwitch: name => { assert.equal(name, 'user-data-dir'); return options.explicitProfile === true; } },
     requestSingleInstanceLock: () => { events.push(['lock', userData]); return ownsLock; },
     quit: () => events.push(['quit']),
     whenReady: () => { events.push(['ready']); return { then: callback => ready.push(callback) }; },
@@ -41,7 +41,7 @@ function load(ownsLock, preview = false, options = {}) {
   const context = vm.createContext({
     require: name => name === 'fs' ? fixtureFs : name === 'electron' ? electron : name === './src/store' ? store
       : name === './package.json' ? { name: preview ? 'hongguo-experience-preview' : 'hongguo-downloader' } : req(name),
-    __dirname: path.dirname(source), process: { ...process, platform: 'linux', env: {} },
+    __dirname: path.dirname(source), process: { ...process, platform: options.platform || 'linux', execPath: options.execPath || process.execPath, env: {} },
     console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController,
     setTimeout: (fn, ms) => { const timer = { unref() {} }; timers.set(timer, { fn, ms }); return timer; }, setInterval: () => ({ unref() {} }), clearTimeout: timer => timers.delete(timer), clearInterval,
   });
@@ -87,6 +87,48 @@ test('lock owner starts once; repeated launches restore its existing window', as
 });
 
 
+test('update support treats portable marker and fallback modes as manual updates', () => {
+  const h = load(true);
+  h.app.isPackaged = true;
+  h.context.process.platform = 'win32';
+  for (const config of [{ mode: 'portable', portableDir: 'C:/portable' }, { mode: 'default', portableDir: 'C:/portable', reason: 'fallback' }]) {
+    h.context.fixtureConfig = config;
+    vm.runInContext('portableConfig = fixtureConfig', h.context);
+    const support = h.context.appUpdateSupport();
+    assert.equal(support.supported, false);
+    assert.match(support.reason, /便携/);
+  }
+  h.context.fixtureConfig = { mode: 'default', portableDir: '' };
+  vm.runInContext('portableConfig = fixtureConfig', h.context);
+  assert.equal(h.context.appUpdateSupport().supported, true);
+});
+
+test('portable marker keeps manual updates when an explicit profile skips migration', () => {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'hongguo-marker-profile-'));
+  try {
+    fs.writeFileSync(path.join(directory, 'portable.marker'), 'portable');
+    const h = load(true, false, { platform: 'win32', explicitProfile: true, execPath: path.join(directory, 'app.exe') });
+    h.app.isPackaged = true;
+    assert.equal(h.context.appUpdateSupport().supported, false, 'custom profile must not turn a portable ZIP into an installer');
+    assert.equal(fs.existsSync(path.join(directory, 'data')), false, 'explicit profile must still skip migration');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('quit waits for an online preparation job to finish cleanup', async () => {
+  const h = load(true);
+  let resolve, aborted = false;
+  const promise = new Promise(done => { resolve = done; });
+  h.context.fixtureJob = { controller: { abort: () => { aborted = true; resolve(); } }, promise };
+  vm.runInContext("onlinePreparing.set('fixture', fixtureJob)", h.context);
+  let prevented = 0;
+  h.app.emit('before-quit', { preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 1);
+  assert.equal(aborted, true, 'quit must abort online preparation');
+  await promise;
+  for (let i = 0; i < 10; i += 1) await new Promise(setImmediate);
+  assert.ok(h.events.some(event => event[0] === 'quit'), 'quit must wait for online cleanup before exiting');
+});
+
 test('startup initialization failure reports its stage and exits without exposing raw errors', async () => {
   const h = load(true, false, { storeFailure: true });
   await assert.doesNotReject(h.ready[0]());
@@ -98,16 +140,21 @@ test('startup initialization failure reports its stage and exits without exposin
   assert.equal(h.events.filter(event => event[0] === 'window').length, 0);
 });
 
-test('pending proxy initialization has a deadline and never opens an unconfigured network window', async () => {
+test('pending proxy initialization is bounded and opens the window without auto-start', async () => {
   const h = load(true, false, { proxyPending: true });
   const startup = h.ready[0]();
   const deadline = [...h.timers.values()].find(timer => timer.ms === 15000);
   assert.ok(deadline, 'proxy startup must not wait forever before the first window');
   deadline.fn();
+  for (let i = 0; i < 20 && ![...h.timers.values()].some(timer => timer.ms === 5000); i += 1) await new Promise(setImmediate);
+  const fallback = [...h.timers.values()].find(timer => timer.ms === 5000);
+  assert.ok(fallback, 'the direct fallback must also be bounded');
+  fallback.fn();
   await startup;
-  assert.match(h.events.find(event => event[0] === 'error')[2], /初始化网络/);
-  assert.equal(h.events.at(-1)[0], 'quit');
-  assert.equal(h.events.filter(event => event[0] === 'window').length, 0);
+  assert.equal(h.events.filter(event => event[0] === 'window').length, 1);
+  assert.equal(h.events.filter(event => event[0] === 'quit').length, 0);
+  assert.equal(h.events.filter(event => event[0] === 'queue').length, 0, 'fallback startup must not auto-resume downloads');
+  assert.equal(vm.runInContext('proxyStartupFallback', h.context), true);
 });
 
 test('successful startup clears its deadline and opens exactly one window', async () => {
@@ -116,6 +163,7 @@ test('successful startup clears its deadline and opens exactly one window', asyn
   assert.equal([...h.timers.values()].filter(timer => timer.ms === 15000).length, 0);
   assert.equal(h.events.filter(event => event[0] === 'window').length, 1);
   assert.equal(h.events.filter(event => event[0] === 'error' || event[0] === 'quit').length, 0);
+  assert.equal(vm.runInContext('proxyStartupFallback', h.context), false);
 });
 
 
@@ -143,14 +191,14 @@ test('saved paused and completed tasks remain loaded without automatic restart',
 });
 
 
-test('a rejected Electron proxy configuration aborts startup through the real settings chain', async () => {
+test('a rejected Electron proxy configuration falls back to direct and still opens the window', async () => {
   const h = load(true, false, { proxyReject: true });
   await h.ready[0]();
-  assert.equal(h.events.filter(event => event[0] === 'proxy').length, 1);
-  assert.equal(h.events.filter(event => event[0] === 'window').length, 0,
-    'a proxy rejection must not open an unconfigured network window');
-  assert.match(h.events.find(event => event[0] === 'error')[2], /初始化网络/);
-  assert.equal(h.events.at(-1)[0], 'quit');
+  assert.equal(h.events.filter(event => event[0] === 'proxy').length, 2, 'primary proxy plus bounded direct fallback');
+  assert.equal(h.events.filter(event => event[0] === 'window').length, 1);
+  assert.equal(h.events.filter(event => event[0] === 'quit').length, 0);
+  assert.equal(h.events.filter(event => event[0] === 'queue').length, 0, 'fallback startup must not auto-resume downloads');
+  assert.equal(vm.runInContext('proxyStartupFallback', h.context), true);
   await assert.rejects(h.context.applyProxySettings({ proxy_enabled: false }),
     error => error.message === '设置网络代理失败，请重试。');
 });

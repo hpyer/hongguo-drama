@@ -55,6 +55,17 @@ function mount(api = {}, component = 'AppUpdateNotice', props = {}) {
     ui.emit('hongguo-check-app-update'); await ui.flush(); assert.ok(ui.text().includes('已是最新版本'));
     result = { enabled: true, release: null, error: '网络连接失败' }; ui.emit('hongguo-check-app-update'); await ui.flush(); assert.ok(ui.text().includes('网络连接失败')); assert.ok(ui.button('重新检查')); ui.unmount();
   });
+  await test('disabled checks preserve the backend reason and recover after proxy repair', async () => {
+    let result = { enabled: false, release: null, error: '请先修复或明确关闭代理。' };
+    const ui = mount({ checkAppUpdate: async () => result }); await ui.flush(); assert.equal(ui.text(), '');
+    ui.emit('hongguo-check-app-update'); await ui.flush();
+    assert.ok(ui.text().includes(result.error), 'manual checks must show the proxy failure reason');
+    assert.ok(!ui.text().includes('更新检测已关闭'), 'a blocked proxy is not an update preference');
+    result = { enabled: false, release: null };
+    await ui.button('重新检查').props.onClick(); await ui.flush(); assert.ok(ui.text().includes('更新检测已关闭'));
+    result = { enabled: true, release };
+    await ui.button('重新检查').props.onClick(); await ui.flush(); assert.ok(ui.button('下载更新')); ui.unmount();
+  });
   await test('unsupported installation provides accurate manual fallback', async () => {
     let opened = 0;
     const ui = mount({ getAppUpdateState: async () => ({ ...idle, supported: false, reason: '便携版请手动安装新版' }), openAppUpdate: async () => { opened++; return { success: true }; } });

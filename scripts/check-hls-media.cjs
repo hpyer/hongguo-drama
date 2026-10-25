@@ -49,6 +49,25 @@ assert.ok(ffmpeg && video, 'Set HONGGUO_FFMPEG and HONGGUO_VIDEO_FIXTURE');
   let allowed = true;
   await assert.rejects(remuxHls({...options,output:output('disabled'),checkAccess:()=>{if(!allowed)throw new Error('source disabled');},request:async(url,args)=>{const response=await request(url,args);if(url.includes('/part'))allowed=false;return response;}}),/disabled/);
   assert.equal(fs.existsSync(output('disabled')),false);
+  await assert.rejects(remuxHls({ ...options, url: 'https://fixture.example/cap.m3u8', output: output('capacity'), tempCapacityBytes: 128,
+    request: async (url, args) => url.endsWith('/cap.m3u8')
+      ? { status: 200, headers: {}, data: Readable.from(['#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\npart0.ts\n#EXT-X-ENDLIST\n']), url }
+      : { status: 200, headers: { 'content-length': '1000' }, data: Readable.from([Buffer.alloc(1000)]), url } }),
+  /暂存空间不足/);
+  assert.equal(fs.existsSync(output('capacity')), false);
+  assert.equal(fs.readdirSync(root).some(name => name.startsWith('.hongguo-hls-')), false, 'failed HLS stage must clean its temp directory');
+
+  const chineseManifest = Buffer.from('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\n中文.ts\n#EXT-X-ENDLIST\n');
+  const split = chineseManifest.indexOf(Buffer.from('中文.ts')) + 1;
+  let chineseSegment = '';
+  await assert.rejects(remuxHls({ ...options, url: 'https://fixture.example/utf8.m3u8', output: output('utf8'),
+    request: async (url, args) => {
+      if (url.endsWith('/utf8.m3u8')) return { status: 200, headers: {}, data: Readable.from([chineseManifest.subarray(0, split), chineseManifest.subarray(split)]), url };
+      chineseSegment = url; throw new Error('segment fixture');
+    } }), /segment fixture/);
+  assert.equal(decodeURIComponent(new URL(chineseSegment).pathname).endsWith('/中文.ts'), true, 'UTF-8 manifest split across chunks must keep the segment name');
+  assert.equal(fs.existsSync(output('utf8')), false);
+
   const controller = new AbortController();
   const pending = remuxHls({...options,output:output('cancel'),signal:controller.signal,request:async(url,args) => {
     if (!url.includes('/part')) return request(url,args);
