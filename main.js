@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 3.6 下载器（独立版）主进程
+ * main.js - 红果短剧 3.7 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -3424,95 +3424,253 @@ ipcMain.handle('download-single-episode', async (event, seriesId, vidIndex, qual
 
 // ===== 观看记录与更新检测 =====
 let historyRefresh = null;
+const historyItemChecks = new Map();
+const historySequelPending = new Map();
+const historySequelCache = new Map();
 const HISTORY_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+const HISTORY_COMPLETED_LOW_INTERVAL = 24 * 60 * 60 * 1000;
+const HISTORY_SEQUEL_INTERVAL = 24 * 60 * 60 * 1000;
+const HISTORY_BATCH_BUDGET = 90 * 1000;
+const HISTORY_ITEM_TIMEOUT = 10 * 1000;
+const HISTORY_SEQUEL_TIMEOUT = 12 * 1000;
+const HISTORY_GROUP_CONCURRENCY = 2;
+const HISTORY_EPISODE_CONCURRENCY = 2;
+const HISTORY_SEQUEL_CACHE_TTL = 30 * 60 * 1000;
+const HISTORY_SEQUEL_FAILURE_TTL = 5 * 60 * 1000;
+const HISTORY_SCOPES = new Set(['all', 'latest', 'unfinished', 'skip-completed-low']);
 
 function historyRows() {
   return watchHistory.listHistory(seriesRegistry, store.getPlayback(), getCurrentSettings().watch_sequels_enabled !== false);
 }
 
-async function refreshWatchHistory(force = false) {
-  if (historyRefresh) return historyRefresh;
-  if (!force && getCurrentSettings().watch_updates_enabled === false) return { success: true, checked: 0, disabled: true };
-  historyRefresh = (async () => {
-    const now = Date.now();
-    const due = historyRows().filter(item => force || now - item.lastCheckedAt >= HISTORY_CHECK_INTERVAL)
-      .sort((a, b) => a.lastCheckedAt - b.lastCheckedAt);
-    const batch = due.slice(0, 20);
-    let checked = 0, failed = 0;
-    for (const row of batch) {
-      const sid = String(row.series_id);
-      const oldSeries = seriesRegistry.find(item => String(item.series_id) === sid);
-      try {
-        const fresh = await hongguo.fetchEpisodeList(sid);
-        if (!Array.isArray(fresh?.episodes) || !fresh.episodes.length) throw new Error('来源没有返回分集，请稍后重试');
-        const settings = getCurrentSettings();
-        let candidates = null, sequelError = '';
-        const previous = store.getPlayback()[sid];
-        const source = watchHistory.sourceOf(sid);
-        if (source && settings.watch_sequels_enabled !== false && (force || now - (previous?.lastSequelCheckAt || 0) >= 24 * 60 * 60 * 1000)) {
-          try {
-            const deadline = Date.now() + 22000;
-            const response = await seriesSearch.findSeriesSequels(oldSeries, seriesRegistry.filter(item => !item.forgotten),
-              (keyword, call) => searchAtSource(keyword, { source, deadline, ...(call || {}) }), { deadline });
-            if (!response?.success) throw new Error(response?.error || '搜索暂不可用');
-            candidates = response.results || [];
-            if (response.partial) sequelError = `新集已检查；续作检查未完成：${response.error || '请稍后重试'}`;
-          } catch (error) { sequelError = `新集已检查；续作检查失败：${error.message}`; }
-        }
-        // Re-read after network waits: a concurrent player save or episode refresh must not be rolled back.
-        const map = store.getPlayback();
-        if (!map[sid]) continue;
-        const currentSeries = seriesRegistry.find(item => String(item.series_id) === sid);
-        if (!currentSeries) continue;
-        const previousRecord = map[sid];
-        const next = watchHistory.applyEpisodeUpdate(previousRecord, currentSeries, fresh);
-        if (candidates) {
-          const combined = new Map((previousRecord.sequels || []).map(item => [item.series_id, item]));
-          for (const item of candidates) combined.set(item.series_id, item);
-          next.sequels = [...combined.values()].slice(-20);
-          if (!sequelError) next.lastSequelCheckAt = Date.now();
-        }
-        next.lastCheckError = sequelError;
-        const newEpisodes = next.knownTotal > (previousRecord.knownTotal ?? currentSeries.total ?? currentSeries.episodes?.length ?? 0);
-        const knownSequels = new Set((previousRecord.sequels || []).map(item => item.series_id));
-        const newSequel = candidates?.some(item => !knownSequels.has(item.series_id));
-        if (fresh.episodes.length >= (currentSeries.episodes?.length || 0)) {
-          const wasDismissed = currentSeries.dismissed === true;
-          const wasForgotten = currentSeries.forgotten === true;
-          upsertSeriesRegistry(fresh);
-          if (wasDismissed) {
-            Object.assign(seriesRegistry.find(item => String(item.series_id) === sid), { dismissed: true, forgotten: wasForgotten });
-            saveSeriesRegistry();
-          }
-        }
-        map[sid] = next;
-        store.savePlayback(map);
-        checked++;
-        if (sequelError) failed++;
-        if ((newEpisodes || newSequel) && settings.watch_notifications_enabled === true && Notification?.isSupported()) {
-          try {
-            const notification = new Notification({ title: `${oldSeries.series_title} 有更新`,
-              body: newEpisodes ? `已更新至 ${next.knownTotal} 集，打开观看记录继续看。` : '发现疑似新一季，打开观看记录查看。' });
-            notification.on('click', () => {
-              if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-              if (mainWindow.isMinimized()) mainWindow.restore();
-              mainWindow.show(); mainWindow.focus();
-              sendToRenderer('navigate', { page: 'history' });
-            });
-            notification.show();
-          } catch (error) { console.warn('[History] 系统通知不可用:', error.message); }
-        }
-      } catch (error) {
-        failed++;
-        const map = store.getPlayback();
-        if (map[sid]) {
-          map[sid] = { ...map[sid], lastCheckedAt: Date.now(), lastCheckError: error.message };
-          store.savePlayback(map);
+function historyOptions(value) {
+  const raw = typeof value === 'boolean' ? { force: value } : (value && typeof value === 'object' ? value : {});
+  return { force: raw.force === true, scope: HISTORY_SCOPES.has(raw.scope) ? raw.scope : 'all' };
+}
+
+function historyGroups(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = watchHistory.familyKey(row) || `series:${row.series_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.values()];
+}
+
+function historyFamilyRows(allRows, row) {
+  const key = watchHistory.familyKey(row);
+  return key ? allRows.filter(item => watchHistory.familyKey(item) === key) : [row];
+}
+
+function historyScopeRows(rows, scope) {
+  if (scope === 'latest') return rows.filter(row => row.isLatestSeason);
+  if (scope === 'unfinished') return rows.filter(row => !row.completed);
+  if (scope === 'skip-completed-low') return rows.filter(row => !(row.completed && !row.isLatestSeason));
+  return rows;
+}
+
+function historyInterval(row) {
+  return row.completed && !row.isLatestSeason ? HISTORY_COMPLETED_LOW_INTERVAL : HISTORY_CHECK_INTERVAL;
+}
+
+function historyPriority(row) {
+  if (row.hasUpdates) return 0;
+  if (!row.completed) return 1;
+  if (row.isLatestSeason) return 2;
+  return 3;
+}
+
+function historyDeadline(ms) {
+  return Date.now() + ms;
+}
+
+function historyTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), Math.max(1, ms)); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function runHistoryPool(items, concurrency, worker, deadline = 0) {
+  let cursor = 0;
+  const width = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: width }, async () => {
+    while (cursor < items.length) {
+      if (deadline && Date.now() >= deadline) return;
+      const item = items[cursor++];
+      await worker(item);
+    }
+  }));
+}
+
+function historySequelResult(series, deadline, retryFailed = false) {
+  const key = watchHistory.familyKey(series) || `series:${series.series_id}`;
+  const now = Date.now();
+  let cached = historySequelCache.get(key);
+  if (retryFailed && cached && (cached.result?.success !== true || cached.result?.partial === true)) {
+    historySequelCache.delete(key);
+    cached = null;
+  }
+  if (cached && cached.expires > now) return Promise.resolve(cached.result);
+  if (historySequelPending.has(key)) return historySequelPending.get(key);
+  const task = (async () => {
+    const searchDeadline = Math.min(deadline || historyDeadline(HISTORY_SEQUEL_TIMEOUT), historyDeadline(HISTORY_SEQUEL_TIMEOUT));
+    const local = watchHistory.findSequels(series, seriesRegistry.filter(item => !item.forgotten));
+    let result;
+    try {
+      result = await historyTimeout(seriesSearch.findSeriesSequels(series, seriesRegistry.filter(item => !item.forgotten),
+        (keyword, call) => searchAtSource(keyword, {
+          source: watchHistory.sourceOf(String(series.series_id)), deadline: searchDeadline, ...(call || {}),
+        }), { deadline: searchDeadline }), Math.max(1000, searchDeadline - Date.now()), '续作搜索超时');
+    } catch (error) {
+      result = { success: false, results: local, candidates: local, partial: true, error: error.message };
+    }
+    const ok = result?.success === true && result?.partial !== true;
+    historySequelCache.set(key, {
+      result, expires: Date.now() + (ok ? HISTORY_SEQUEL_CACHE_TTL : HISTORY_SEQUEL_FAILURE_TTL),
+    });
+    if (historySequelCache.size > 64) historySequelCache.delete(historySequelCache.keys().next().value);
+    return result;
+  })().finally(() => historySequelPending.delete(key));
+  historySequelPending.set(key, task);
+  return task;
+}
+
+function historyContext(rows, allRows, force, deadline, retryFailed = false) {
+  const familyRows = historyFamilyRows(allRows, rows[0]);
+  const latest = familyRows.reduce((best, row) => watchHistory.seasonOf(row) > watchHistory.seasonOf(best) ? row : best, familyRows[0]);
+  const sequelDue = new Set();
+  if (getCurrentSettings().watch_sequels_enabled !== false) {
+    for (const row of rows) {
+      const previous = store.getPlayback()[String(row.series_id)];
+      if (force || Date.now() - (previous?.lastSequelCheckAt || 0) >= HISTORY_SEQUEL_INTERVAL) sequelDue.add(String(row.series_id));
+    }
+  }
+  const latestSeries = seriesRegistry.find(item => String(item.series_id) === String(latest.series_id));
+  const sequelPromise = sequelDue.size && latestSeries && watchHistory.sourceOf(String(latestSeries.series_id))
+    ? historySequelResult(latestSeries, deadline, retryFailed) : null;
+  return { sequelDue, sequelPromise, deadline, notifiedSequelIds: new Set() };
+}
+
+async function checkHistoryRow(row, context) {
+  const sid = String(row.series_id);
+  if (historyItemChecks.has(sid)) return historyItemChecks.get(sid);
+  const task = (async () => {
+    const itemDeadline = Math.min(context.deadline, historyDeadline(HISTORY_ITEM_TIMEOUT));
+    try {
+      const fresh = await historyTimeout(hongguo.fetchEpisodeList(sid, { force: true, deadline: itemDeadline }),
+        Math.max(1, itemDeadline - Date.now()), '分集更新检查超时');
+      if (!Array.isArray(fresh?.episodes) || !fresh.episodes.length) throw new Error('来源没有返回分集，请稍后重试');
+
+      let sequelResponse = null;
+      if (context.sequelPromise && context.sequelDue.has(sid)) sequelResponse = await context.sequelPromise;
+
+      // Re-read after network waits: a concurrent player save or episode refresh must not be rolled back.
+      const map = store.getPlayback();
+      if (!map[sid]) return { status: 'skipped' };
+      const currentSeries = seriesRegistry.find(item => String(item.series_id) === sid);
+      if (!currentSeries) return { status: 'skipped' };
+      const previousRecord = map[sid];
+      const next = watchHistory.applyEpisodeUpdate(previousRecord, currentSeries, fresh);
+      if (sequelResponse) {
+        const candidates = watchHistory.findSequels(currentSeries, sequelResponse.candidates || sequelResponse.results || []);
+        const combined = new Map((previousRecord.sequels || []).map(item => [item.series_id, item]));
+        for (const item of candidates) combined.set(item.series_id, item);
+        next.sequels = [...combined.values()].slice(-20);
+        next.lastSequelCheckError = sequelResponse.partial ? (sequelResponse.error || '请稍后重试') : '';
+        if (sequelResponse.success === true && sequelResponse.partial !== true) next.lastSequelCheckAt = Date.now();
+      }
+      next.lastCheckError = next.lastSequelCheckError ? `续作检查未完成：${next.lastSequelCheckError}` : '';
+      const newEpisodes = next.knownTotal > (previousRecord.knownTotal ?? currentSeries.total ?? currentSeries.episodes?.length ?? 0);
+      const knownSequels = new Set((previousRecord.sequels || []).map(item => item.series_id));
+      const rowCandidates = sequelResponse
+        ? watchHistory.findSequels(currentSeries, sequelResponse.candidates || sequelResponse.results || [])
+        : [];
+      const newSequel = sequelResponse?.success === true && rowCandidates.some(item => !knownSequels.has(item.series_id));
+      if (fresh.episodes.length >= (currentSeries.episodes?.length || 0)) {
+        const wasDismissed = currentSeries.dismissed === true;
+        const wasForgotten = currentSeries.forgotten === true;
+        upsertSeriesRegistry(fresh);
+        if (wasDismissed) {
+          Object.assign(seriesRegistry.find(item => String(item.series_id) === sid), { dismissed: true, forgotten: wasForgotten });
+          saveSeriesRegistry();
         }
       }
+      map[sid] = next;
+      store.savePlayback(map);
+      const settings = getCurrentSettings();
+      const unseenSequels = rowCandidates.filter(item => !knownSequels.has(item.series_id) && !context.notifiedSequelIds.has(item.series_id));
+      for (const item of unseenSequels) context.notifiedSequelIds.add(item.series_id);
+      if ((newEpisodes || unseenSequels.length) && settings.watch_notifications_enabled === true && Notification?.isSupported()) {
+        try {
+          const title = currentSeries.series_title || fresh.series_title || '短剧';
+          const notification = new Notification({ title: `${title} 有更新`,
+            body: newEpisodes ? `已更新至 ${next.knownTotal} 集，打开观看记录继续看。` : '发现疑似新一季，打开观看记录查看。' });
+          notification.on('click', () => {
+            if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show(); mainWindow.focus();
+            sendToRenderer('navigate', { page: 'history' });
+          });
+          notification.show();
+        } catch (error) { console.warn('[History] 系统通知不可用:', error.message); }
+      }
+      return { status: 'checked', hasUpdates: newEpisodes || newSequel,
+        error: next.lastEpisodeCheckError || next.lastSequelCheckError || '' };
+    } catch (error) {
+      const map = store.getPlayback();
+      if (map[sid]) {
+        map[sid] = { ...map[sid], lastCheckedAt: Date.now(), lastEpisodeCheckError: error.message,
+          lastSequelCheckError: map[sid].lastSequelCheckError || '', lastCheckError: error.message };
+        store.savePlayback(map);
+      }
+      return { status: 'failed', error: error.message };
     }
+  })().finally(() => historyItemChecks.delete(sid));
+  historyItemChecks.set(sid, task);
+  return task;
+}
+
+async function refreshWatchHistory(forceOrOptions = false) {
+  if (historyRefresh) return historyRefresh;
+  const options = historyOptions(forceOrOptions);
+  if (!options.force && getCurrentSettings().watch_updates_enabled === false) {
+    return { success: true, checked: 0, failed: 0, remaining: 0, disabled: true };
+  }
+  historyRefresh = (async () => {
+    const now = Date.now();
+    const allRows = historyRows();
+    const scoped = historyScopeRows(allRows, options.scope);
+    const eligible = scoped.filter(item => options.force || now - item.lastCheckedAt >= historyInterval(item));
+    const groups = historyGroups(eligible).sort((a, b) => {
+      const priority = rows => Math.min(...rows.map(historyPriority));
+      return priority(a) - priority(b) || Math.max(...b.map(row => row.updatedAt)) - Math.max(...a.map(row => row.updatedAt));
+    });
+    const deadline = historyDeadline(HISTORY_BATCH_BUDGET);
+    const processed = new Set();
+    let checked = 0, failed = 0, skipped = 0;
+    sendToRenderer('watch-history-progress', { phase: 'start', total: eligible.length, checked, failed, current: '', remaining: eligible.length });
+    await runHistoryPool(groups, HISTORY_GROUP_CONCURRENCY, async group => {
+      if (Date.now() >= deadline) return;
+      const context = historyContext(group, allRows, options.force, deadline, options.force);
+      await runHistoryPool(group, HISTORY_EPISODE_CONCURRENCY, async row => {
+        const result = await checkHistoryRow(row, context);
+        processed.add(String(row.series_id));
+        if (result.status === 'checked') { checked++; if (result.error) failed++; }
+        else if (result.status === 'failed') failed++;
+        else skipped++;
+        const remaining = eligible.filter(item => !processed.has(String(item.series_id))).length;
+        sendToRenderer('watch-history-progress', {
+          phase: 'running', total: eligible.length, checked, failed, skipped, current: row.series_title, remaining,
+        });
+      }, deadline);
+    }, deadline);
+    const remaining = eligible.filter(item => !processed.has(String(item.series_id))).length;
+    sendToRenderer('watch-history-progress', { phase: 'done', total: eligible.length, checked, failed, skipped, current: '', remaining });
     sendToRenderer('watch-history-updated', {});
-    return { success: true, checked, failed, remaining: Math.max(0, due.length - batch.length) };
+    return { success: true, checked, failed, skipped, remaining, total: eligible.length, scope: options.scope };
   })().catch(error => ({ success: false, error: error.message })).finally(() => { historyRefresh = null; });
   return historyRefresh;
 }
@@ -3528,7 +3686,18 @@ ipcMain.handle('remove-watch-history', async (_event, seriesId) => {
 });
 
 ipcMain.handle('get-watch-history', async () => ({ success: true, results: historyRows() }));
-ipcMain.handle('refresh-watch-history', async () => refreshWatchHistory(true));
+ipcMain.handle('refresh-watch-history', async (_event, options) => refreshWatchHistory({ force: true, scope: options?.scope }));
+ipcMain.handle('check-watch-history-item', async (_event, seriesId) => {
+  const sid = String(seriesId || '');
+  const allRows = historyRows();
+  const row = allRows.find(item => String(item.series_id) === sid);
+  if (!row) return { success: false, error: '未找到这条观看记录，请刷新后重试。' };
+  const context = historyContext([row], allRows, true, historyDeadline(HISTORY_ITEM_TIMEOUT + HISTORY_SEQUEL_TIMEOUT), true);
+  const result = await checkHistoryRow(row, context);
+  sendToRenderer('watch-history-updated', {});
+  return { success: result.status !== 'failed', checked: result.status === 'checked' ? 1 : 0,
+    failed: result.status === 'failed' || result.error ? 1 : 0, status: result.status, error: result.error || '' };
+});
 ipcMain.handle('acknowledge-watch-updates', async (_event, seriesId, snapshot) => {
   try {
     const map = store.getPlayback();

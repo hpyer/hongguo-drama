@@ -59,13 +59,15 @@ async function findSeriesSequels(series, localCandidates, search, { localOnly = 
   if (!source) return { success: false, results: [], error: '此来源暂不支持查找下一季，请按完整剧名搜索。' };
   if (!parsed.base || parsed.invalid || parsed.season > 99) return { success: false, results: [], error: '剧名或季数无法识别，请按完整剧名搜索。' };
   const local = findSequels(series, localCandidates);
-  if (localOnly) return { success: true, results: local };
+  if (localOnly) return { success: true, results: local, candidates: local };
   try {
     const response = await searchSeries(parsed.base, search, [series, ...local], { afterSeason: parsed.season, deadline });
     if (!response?.success) throw new Error(response?.error || '来源搜索失败');
-    return { success: true, results: findSequels(series, [...local, ...(response.results || [])]), ...(response.partial ? { partial: true, error: response.error } : {}) };
+    // Keep the unfiltered candidates so lower seasons in the same family can reuse one search.
+    const candidates = [...local, ...(response.results || [])];
+    return { success: true, results: findSequels(series, candidates), candidates, ...(response.partial ? { partial: true, error: response.error } : {}) };
   } catch (error) {
-    return { success: local.length > 0, results: local, partial: true, error: `联网查找未完成：${error.message}${local.length ? '；已保留本机候选。' : '；可稍后重试。'}` };
+    return { success: local.length > 0, results: local, candidates: local, partial: true, error: `联网查找未完成：${error.message}${local.length ? '；已保留本机候选。' : '；可稍后重试。'}` };
   }
 }
 

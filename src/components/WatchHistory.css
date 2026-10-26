@@ -1,6 +1,8 @@
 .history-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
 .history-header h1 { margin: 0 0 8px; }
 .history-header p, .history-hint { color: var(--text-secondary); line-height: 1.65; }
+.history-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.history-scope { min-height: 38px; padding: 7px 30px 7px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-primary); }
 .history-hint { margin: 0 0 24px; max-width: 72ch; }
 .history-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .history-filter button { padding: 8px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
@@ -9,6 +11,7 @@
 .history-list { list-style: none; padding: 0; margin: 0; }
 .history-row { border-bottom: 1px solid var(--border); padding: 16px 0; }
 .history-main { display: flex; align-items: center; gap: 12px; }
+.history-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .history-remove { flex-shrink: 0; }
 .history-resume { min-width: 0; display: flex; align-items: center; gap: 20px; width: 100%; padding: 8px; border: 0; border-radius: 9px; text-align: left; background: transparent; color: var(--text-primary); }
 .history-resume:hover { background: var(--bg-inset); }
@@ -27,4 +30,4 @@
 .history-empty { padding: 64px 20px; text-align: center; color: var(--text-secondary); }
 .history-empty h2 { margin: 16px 0 8px; color: var(--text-primary); }
 .history-empty .btn { margin-top: 20px; }
-@media (max-width: 900px) { .history-header { align-items: flex-start; flex-wrap: wrap; } .history-resume { gap: 12px; } .history-sequels { padding-left: 8px; } }
+@media (max-width: 900px) { .history-header { align-items: flex-start; flex-wrap: wrap; } .history-resume { gap: 12px; } .history-sequels { padding-left: 8px; } .history-main { align-items: flex-start; } .history-row-actions { flex-direction: column; } }

@@ -1,4 +1,4 @@
-// 红果短剧 3.6：桌面桥接入口，发行说明见 docs/release-3.6.md。
+// 红果短剧 3.7：桌面桥接入口，发行说明见 docs/release-3.7.md。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -100,12 +100,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 观看记录
   getWatchHistory: () => ipcRenderer.invoke('get-watch-history'),
-  refreshWatchHistory: () => ipcRenderer.invoke('refresh-watch-history'),
+  refreshWatchHistory: (options) => ipcRenderer.invoke('refresh-watch-history', options),
+  checkWatchHistoryItem: (seriesId) => ipcRenderer.invoke('check-watch-history-item', seriesId),
   acknowledgeWatchUpdates: (seriesId, snapshot) => ipcRenderer.invoke('acknowledge-watch-updates', seriesId, snapshot),
   onWatchHistoryUpdated: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('watch-history-updated', listener);
     return () => ipcRenderer.removeListener('watch-history-updated', listener);
+  },
+  onWatchHistoryProgress: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('watch-history-progress', listener);
+    return () => ipcRenderer.removeListener('watch-history-progress', listener);
   },
 
   // 一键合并

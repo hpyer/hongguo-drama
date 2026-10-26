@@ -8,18 +8,27 @@ function isWatched(record) {
 }
 
 function listHistory(series, playback, showSequels = true) {
-  return series.filter(item => isWatched(playback[item.series_id])).map(item => {
+  const watched = series.filter(item => isWatched(playback[item.series_id]));
+  const latestByFamily = new Map();
+  for (const item of watched) {
+    const key = familyKey(item);
+    if (key) latestByFamily.set(key, Math.max(latestByFamily.get(key) || 0, seasonOf(item)));
+  }
+  return watched.map(item => {
     const record = playback[item.series_id];
     const sequels = showSequels && Array.isArray(record.sequels) ? record.sequels : [];
     const seen = new Set(record.seenSequelIds || []);
     const total = Math.max(totalEpisodes(item), record.knownTotal || 0);
+    const family = familyKey(item), season = seasonOf(item);
     return {
       series_id: item.series_id, series_title: item.series_title, cover: item.cover || '',
       total, completed: total > 0 && Number.isInteger(record.completedEpisode) && record.completedEpisode >= total,
       vid_index: record.vid_index, currentTime: record.currentTime, updatedAt: record.updatedAt,
       unreadEpisodes: record.unreadEpisodes || 0, sequels,
       hasUpdates: record.unreadEpisodes > 0 || sequels.some(candidate => !seen.has(candidate.series_id)),
+      season, isLatestSeason: !!family && season === latestByFamily.get(family),
       lastCheckedAt: record.lastCheckedAt || 0, lastCheckError: record.lastCheckError || '',
+      lastEpisodeCheckError: record.lastEpisodeCheckError || '', lastSequelCheckError: record.lastSequelCheckError || '',
     };
   }).sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -42,7 +51,8 @@ function applyEpisodeUpdate(record, oldSeries, freshSeries, now = Date.now()) {
   const knownTotal = Math.max(baseline, totalEpisodes(freshSeries));
   const acknowledgedTotal = record.acknowledgedTotal ?? baseline;
   return { ...record, knownTotal, acknowledgedTotal,
-    unreadEpisodes: Math.max(0, knownTotal - acknowledgedTotal), lastCheckedAt: now, lastCheckError: '' };
+    unreadEpisodes: Math.max(0, knownTotal - acknowledgedTotal), lastCheckedAt: now,
+    lastEpisodeCheckError: '', lastCheckError: record.lastSequelCheckError || '' };
 }
 
 function seasonTitle(title) {
@@ -73,6 +83,18 @@ function sourceOf(id) {
   return null;
 }
 
+function familyKey(series) {
+  const parsed = seasonTitle(series?.series_title);
+  const source = sourceOf(String(series?.series_id || ''));
+  if (!source || !parsed.base || parsed.invalid) return '';
+  return `${source}\u0000${parsed.base}`;
+}
+
+function seasonOf(series) {
+  const parsed = seasonTitle(series?.series_title);
+  return parsed.invalid ? 0 : parsed.season;
+}
+
 // shortcut: independent sequels have no authoritative relation; only exact base titles with higher explicit seasons qualify.
 function findSequels(series, candidates) {
   const current = seasonTitle(series.series_title);
@@ -101,4 +123,4 @@ function acknowledge(record, snapshot) {
     seenSequelIds: [...new Set([...(record.seenSequelIds || []), ...visibleIds.filter(id => knownIds.has(id))])] };
 }
 
-module.exports = { listHistory, recordPlayback, applyEpisodeUpdate, seasonTitle, sourceOf, findSequels, sequelKeyword, acknowledge };
+module.exports = { listHistory, recordPlayback, applyEpisodeUpdate, seasonTitle, sourceOf, familyKey, seasonOf, findSequels, sequelKeyword, acknowledge };

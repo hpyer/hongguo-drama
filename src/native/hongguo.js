@@ -86,15 +86,17 @@ const MODEL_BIZ_PARAM = {
 /**
  * API 调用封装
  */
-async function apiCall(apiPath, body, retries = 3, timeout = 25000) {
+async function apiCall(apiPath, body, retries = 3, timeout = 25000, deadline = 0) {
   const q = { ...COMMON_QUERY, _rticket: Date.now().toString() };
   for (let i = 0; i < retries; i++) {
+    const remaining = deadline ? deadline - Date.now() : timeout;
+    if (remaining <= 0) throw new Error('请求超时');
     const signal = {}; // 供错误信息回溯（HTTP 状态 / 字节数 / CDN logid）
     try {
       const res = await axios.post(API + apiPath, body, {
         params: q,
         headers: HEADERS,
-        timeout,
+        timeout: Math.min(timeout, remaining),
         // 200 + 空 body 时 axios 会解析成 ''，这里统一按原始字节处理便于判断
         responseType: 'arraybuffer',
         transformResponse: [(d) => d],
@@ -130,7 +132,12 @@ async function apiCall(apiPath, body, retries = 3, timeout = 25000) {
       }
       // A 200 with no body is usually a gateway dropping the request before business
       // processing, so it is transient too; retry it sooner than a real timeout.
-      await new Promise(r => setTimeout(r, (err.emptyResponse ? 700 : 2000) * (i + 1)));
+      const wait = (err.emptyResponse ? 700 : 2000) * (i + 1);
+      if (deadline && Date.now() + wait >= deadline) {
+        if (err.detail === undefined) err.detail = signal;
+        throw err;
+      }
+      await new Promise(r => setTimeout(r, wait));
     }
   }
 }
@@ -414,11 +421,13 @@ async function resolveSeriesId(shareUrl) {
 /**
  * 获取全集剧集列表
  */
-async function fetchEpisodeList(seriesId) {
+async function fetchEpisodeList(seriesId, options = {}) {
   if (String(seriesId).startsWith('custom:')) return require('./custom-source').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('hema:')) return require('./hema').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('xifan:')) return require('./xifan').fetchEpisodeList(seriesId);
-  return cachedRequest(`episodes:${seriesId}`, 60000, () => fetchEpisodeListFresh(seriesId));
+  return cachedRequest(`episodes:${seriesId}`, 60000,
+    () => fetchEpisodeListFresh(seriesId, { deadline: Number(options.deadline) || 0 }),
+    { force: options.force === true });
 }
 
 function describeWebLoadError(error) {
@@ -429,15 +438,17 @@ function describeWebLoadError(error) {
   return message || '加载失败';
 }
 
-async function fetchEpisodeListFromWeb(seriesId) {
+async function fetchEpisodeListFromWeb(seriesId, deadline = 0) {
   // Some /player pages are served from a broken CDN edge (hang then abort), while the
   // detail route for the same series is healthy. Race both; parse whichever is valid.
   const id = String(seriesId);
   const race = async (timeout, trustedOfficialDns) => {
+    const budget = deadline ? Math.min(timeout, deadline - Date.now()) : timeout;
+    if (budget <= 0) throw new Error('加载超时或连接中断');
     const controller = new AbortController();
     const attempts = [
-      () => fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(id)}`, timeout, controller.signal, { trustedOfficialDns }),
-      () => fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, timeout, controller.signal, { trustedOfficialDns }),
+      () => fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(id)}`, budget, controller.signal, { trustedOfficialDns }),
+      () => fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, budget, controller.signal, { trustedOfficialDns }),
     ].map(run => run().then(html => parseEpisodeListHtml(html, id)));
     attempts.forEach(promise => promise.catch(() => {}));
     try { return await Promise.any(attempts); }
@@ -456,8 +467,10 @@ async function fetchEpisodeListFromWeb(seriesId) {
   const hedge = (async () => {
     // Give the first attempt a short head start. A hung CDN edge usually reveals
     // itself within this window; a healthy page has already returned by then.
-    await new Promise(resolve => setTimeout(resolve, 600));
+    const wait = deadline ? Math.min(600, Math.max(0, deadline - Date.now())) : 600;
+    await new Promise(resolve => setTimeout(resolve, wait));
     if (firstValue) return firstValue; // the first attempt won; do not add traffic
+    if (deadline && Date.now() >= deadline) throw new Error('加载超时或连接中断');
     // Keep trusted DNS for speed, but also retry the ordinary resolver so a blocked
     // DoH endpoint cannot take the whole episode list down.
     return Promise.any([race(3500, true), race(3500, false)]);
@@ -470,10 +483,10 @@ async function fetchEpisodeListFromWeb(seriesId) {
   }
 }
 
-async function fetchEpisodeListFresh(seriesId) {
+async function fetchEpisodeListFresh(seriesId, { deadline = 0 } = {}) {
   let webError;
   try {
-    return await fetchEpisodeListFromWeb(seriesId);
+    return await fetchEpisodeListFromWeb(seriesId, deadline);
   } catch (error) {
     webError = error;
   }
@@ -484,7 +497,7 @@ async function fetchEpisodeListFresh(seriesId) {
   };
   let j;
   try {
-    j = await apiCall("/novel/player/multi_video_detail/preload/v1", body);
+    j = await apiCall("/novel/player/multi_video_detail/preload/v1", body, 3, 25000, deadline);
   } catch (e) {
     throw new Error(`获取分集失败：官网数据源（${webError.message}），备用接口（${e.message}）`);
   }

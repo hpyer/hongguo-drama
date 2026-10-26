@@ -60,7 +60,7 @@ const { transformSync } = require('esbuild');
 const historySource = transformSync(fs.readFileSync(require('node:path').join(__dirname, '../src/components/WatchHistory.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
 function mountHistory({ missing = false, playError = '', resolveError = '', locked = false, acknowledgeError = '' } = {}) {
- const slots = [], effects = [], calls = [], acknowledgements = [];
+ const slots = [], effects = [], calls = [], acknowledgements = [], refreshCalls = [], itemChecks = [];
  let cursor = 0, tree;
  const react = {
   createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
@@ -88,6 +88,15 @@ function mountHistory({ missing = false, playError = '', resolveError = '', lock
    acknowledgements.push(JSON.parse(JSON.stringify(args)));
    return acknowledgeError ? { success: false, error: acknowledgeError } : { success: true };
   },
+  refreshWatchHistory: async options => {
+   refreshCalls.push(JSON.parse(JSON.stringify(options || {})));
+   return { success: true, checked: 1, failed: 0, remaining: 0 };
+  },
+  checkWatchHistoryItem: async id => {
+   itemChecks.push(id);
+   return { success: true, checked: 1, failed: 0, status: 'checked' };
+  },
+  onWatchHistoryProgress: () => () => {},
  };
  const module = { exports: {} };
  vm.runInNewContext(historySource, { module, exports: module.exports, require: name => name === 'react' ? react : {}, window: { electronAPI: api } });
@@ -95,7 +104,9 @@ function mountHistory({ missing = false, playError = '', resolveError = '', lock
  const find = predicate => { const visit = node => { if (!node || typeof node !== 'object') return; if (predicate(node)) return node; return node.children?.map(visit).find(Boolean); }; return visit(tree); };
  const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); render(); } };
  render();
- return { calls, acknowledgements, find, flush, open: async () => { await flush(); await find(node => node.type === 'button' && node.children.includes('续作')).props.onClick(); await flush(); }, error: () => find(node => node.props.role === 'alert')?.children[0]?.children[0] };
+ return { calls, acknowledgements, refreshCalls, itemChecks, find, flush, render,
+  open: async () => { await flush(); await find(node => node.type === 'button' && node.children.includes('续作')).props.onClick(); await flush(); },
+  error: () => find(node => node.props.role === 'alert')?.children[0]?.children[0] };
 }
 
 test('local sequel starts from the first playable episode without network or saved-position resume', async () => {
@@ -123,4 +134,22 @@ for (const options of [{ missing: true, resolveError: 'offline' }, { missing: tr
  const ui = mountHistory(options); await ui.open();
  assert.ok(ui.error()); assert.ok(ui.find(node => node.props['aria-label'] === '有更新'));
  if (!options.acknowledgeError) assert.equal(ui.acknowledgements.length, 0);
+});
+
+test('single-row detection calls the dedicated bridge and refreshes the row', async () => {
+ const ui = mountHistory(); await ui.flush();
+ const button = ui.find(node => node.props['aria-label'] === '检测《原剧》的更新');
+ assert.ok(button);
+ await button.props.onClick(); await ui.flush();
+ assert.deepEqual(ui.itemChecks, ['A']);
+ assert.match(ui.find(node => node.props.role === 'status')?.children?.join('') || '', /已检测完成/);
+});
+
+test('batch detection forwards the selected scope', async () => {
+ const ui = mountHistory(); await ui.flush();
+ const select = ui.find(node => node.type === 'select');
+ select.props.onChange({ target: { value: 'latest' } }); ui.render();
+ const button = ui.find(node => node.type === 'button' && node.children.includes('检查更新'));
+ await button.props.onClick(); await ui.flush();
+ assert.deepEqual(ui.refreshCalls, [{ scope: 'latest' }]);
 });
