@@ -54,6 +54,36 @@ async function check() {
   assert.equal(episodes.episodes[1].locked, true);
   assert.equal(episodes.episodes[2].locked, true, '缺少unlock必须拒绝');
   assert.ok(!JSON.stringify(episodes).includes('playUrl'), '分集不泄露锁定集媒体地址');
+
+  const originalDetail = structuredClone(detail);
+  Object.assign(detail, { source: 'jiuzhou', duanjuId: '253', title: '天龙战神',
+    episodeList: [
+      { episodeId: '65863', index: 1, title: '爱归良辰', unlock: true, playUrl: originalDetail.episodeList[0].playUrl },
+      { episodeId: '50846', index: 2, title: '爱归良辰', unlock: false, playUrl: originalDetail.episodeList[1].playUrl },
+    ] });
+  const known = await xifan.fetchEpisodeList('xifan:jiuzhou:253');
+  assert.equal(known.episodes[0].title, '', '已核实的上游冲突标题不能显示为可信分集名');
+  assert.equal(known.series_title, '天龙战神');
+  assert.deepEqual(Array.from(known.episodes, ep => [ep.vid, ep.vid_index, ep.locked]), [
+    ['xifan:jiuzhou:253:65863', 1, false], ['xifan:jiuzhou:253:50846', 2, true],
+  ], '去除标题不能改变分集编号、顺序或权限');
+  assert.equal((await xifan.fetchPlayUrlSingle(known.episodes[0].vid, known.series_id)).url, originalDetail.episodeList[0].playUrl);
+  for (const [seriesId, seriesTitle, title] of [
+    ['xifan:jiuzhou:254', '天龙战神', '爱归良辰'],
+    ['xifan:huabo:253', '天龙战神', '爱归良辰'],
+    ['xifan:jiuzhou:253', '爱归良辰', '爱归良辰'],
+    ['xifan:jiuzhou:253', '天龙战神', '天龙战神'],
+    ['xifan:jiuzhou:253', '天龙战神', '第一章：归来'],
+    ['xifan:jiuzhou:253', '天龙战神', '第二章：重逢'],
+    ['xifan:jiuzhou:253', '天龙战神', '来源正式别名'],
+    ['xifan:jiuzhou:253', '天龙战神', ''],
+  ]) {
+    assert.equal(xifan.episodeDisplayTitle(seriesId, seriesTitle, title), title, '其他来源、剧名、正常分集或别名不得误伤');
+  }
+  assert.equal(xifan.episodeDisplayTitle('xifan:jiuzhou:253', '天龙战神', '爱归良辰'), '', '旧资料使用同一纯展示规则');
+  Object.assign(detail, originalDetail);
+  console.log('PASS 西饭已核实冲突标题回退，保留剧名、分集身份、权限、媒体映射及其他别名');
+
   assert.ok((await xifan.fetchPlayUrlSingle(vid, sid)).url);
   detail.episodeList[0].unlock = false;
   assert.equal((await xifan.fetchPlayUrlSingle(vid, sid)).url, null, '原先可用地址也必须重新验锁');

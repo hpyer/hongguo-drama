@@ -7,6 +7,7 @@ import { feedCacheKey, readFeedCache, writeFeedCache } from './feedCache.mjs';
 import { loadRandomPool, playRecommendedDrama, waitForRequest } from './randomDramaModel.mjs';
 import './DramaFeed.css';
 
+const CATALOG_CHANNEL_KEY = 'hongguo.feed.catalog.channel.v1';
 const RANKINGS = [
   ['hot-drama', '热播总榜'], ['hot-real-drama', '真人短剧'],
   ['hot-comic-drama', '漫剧'], ['hot-ai-drama', 'AI 短剧'],
@@ -21,10 +22,14 @@ function clockOf(timestamp) {
 // 先显示会话内上次片单，再后台更新；更新失败保留旧内容。只有“刷新片单”强制取最新。
 function DramaFeed({ active = true, onNavigate }) {
   const [source, setSource] = useState('hongguo');
+  const [catalogChannel, setCatalogChannel] = useState(() => {
+    try { return localStorage.getItem(CATALOG_CHANNEL_KEY) === 'web' ? 'web' : 'app'; }
+    catch (_) { return 'app'; }
+  });
   const { sources: mediaSources, revision, loading: sourcesLoading, error: sourcesError } = useMediaSources();
   const [category, setCategory] = useState('hot-drama');
-  const [items, setItems] = useState(() => readFeedCache(feedCacheKey(revision, source, category))?.items || []);
-  const [updatedAt, setUpdatedAt] = useState(() => readFeedCache(feedCacheKey(revision, source, category))?.savedAt || 0);
+  const [items, setItems] = useState(() => readFeedCache(feedCacheKey(revision, source, category, catalogChannel))?.items || []);
+  const [updatedAt, setUpdatedAt] = useState(() => readFeedCache(feedCacheKey(revision, source, category, catalogChannel))?.savedAt || 0);
   const [index, setIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [resolving, setResolving] = useState(false);
@@ -44,12 +49,12 @@ function DramaFeed({ active = true, onNavigate }) {
   itemsRef.current = items;
   selectedIdRef.current = selected ? String(selected.series_id) : '';
 
-  const seedFeed = useCallback((nextSource, nextCategory) => {
-    const cached = nextCategory === 'random' ? null : readFeedCache(feedCacheKey(revision, nextSource, nextCategory));
+  const seedFeed = useCallback((nextSource, nextCategory, nextChannel = catalogChannel) => {
+    const cached = nextCategory === 'random' ? null : readFeedCache(feedCacheKey(revision, nextSource, nextCategory, nextChannel));
     setItems(cached?.items || []);
     setUpdatedAt(cached?.savedAt || 0);
     setIndex(0);
-  }, [revision]);
+  }, [revision, catalogChannel]);
 
   const stopRequests = useCallback(() => {
     listController.current?.abort();
@@ -67,6 +72,15 @@ function DramaFeed({ active = true, onNavigate }) {
     setSource(nextSource); setCategory(nextCategory);
   };
 
+  const switchCatalogChannel = next => {
+    if (!['app', 'web'].includes(next) || next === catalogChannel) return;
+    stopRequests();
+    setError(''); setNotice(''); setLoading(true);
+    seedFeed(source, category, next);
+    setCatalogChannel(next);
+    try { localStorage.setItem(CATALOG_CHANNEL_KEY, next); } catch (_) { /* selection still works for this launch */ }
+  };
+
   const cancelLoad = () => {
     listController.current?.abort();
     setLoading(false);
@@ -77,7 +91,7 @@ function DramaFeed({ active = true, onNavigate }) {
   const loadList = useCallback(async (forceRefresh = false) => {
     if (!active || random || sourcesLoading || !source) return;
     if (!mediaSources.some(item => item.id === source)) return;
-    const key = feedCacheKey(revision, source, category);
+    const key = feedCacheKey(revision, source, category, catalogChannel);
     const cached = readFeedCache(key);
     if (!itemsRef.current.length && cached?.items?.length) {
       setItems(cached.items); setUpdatedAt(cached.savedAt); setIndex(0);
@@ -90,7 +104,7 @@ function DramaFeed({ active = true, onNavigate }) {
       let nextItems;
       if (ranking) {
         const result = await waitForRequest(window.electronAPI.browseList({
-          source, category, page: 1, forceRefresh,
+          source, category, page: 1, forceRefresh, catalogChannel,
         }), { signal: controller.signal, message: '热播榜加载超时，请重试' });
         if (controller.signal.aborted) return;
         if (!result?.success) throw new Error(result?.error || '热播榜暂时不可用');
@@ -125,7 +139,7 @@ function DramaFeed({ active = true, onNavigate }) {
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [active, random, sourcesLoading, source, category, revision, ranking, mediaSources]);
+  }, [active, random, sourcesLoading, source, category, catalogChannel, revision, ranking, mediaSources]);
 
   // 来源配置被编辑后（revision 变化）旧片单不再可信，清空后按新 revision 重新取。
   useEffect(() => {
@@ -170,7 +184,7 @@ function DramaFeed({ active = true, onNavigate }) {
     setPlayError(''); setIndex(next);
   };
 
-  const introduction = selected?.intro || selected?.series_intro;
+  const introduction = selected?.intro || selected?.series_intro || selected?.description;
   const upcoming = items.slice(index + 1, index + 5);
   return <section className="drama-feed" aria-label="热播推荐">
     <header className="drama-feed-header">
@@ -179,6 +193,7 @@ function DramaFeed({ active = true, onNavigate }) {
         {!random && <label className="source-control">来源<select className="input-field" aria-label="推荐来源" value={source} onChange={event => switchFeed(event.target.value, 'hot-drama')}>
           {mediaSources.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
         </select></label>}
+        {ranking && !random && <label className="source-control">目录线路<select className="input-field" aria-label="推荐目录线路" value={catalogChannel} onChange={event => switchCatalogChannel(event.target.value)}><option value="app">App（快速）</option><option value="web">官网</option></select></label>}
         <button className="btn btn-outline" disabled={!random && (sourcesLoading || !source || (loading && !items.length))} onClick={() => random ? setRandomRefresh(value => value + 1) : loadList(true)}><RefreshCw size={15} />刷新片单</button>
       </div>
     </header>
@@ -190,7 +205,7 @@ function DramaFeed({ active = true, onNavigate }) {
     </div>
     {random ? <RandomDrama active={active} refreshKey={randomRefresh} onNavigate={onNavigate} /> : <>
       {sourcesError && <p className="drama-feed-hint" role="status">来源列表更新失败，暂用上次列表；可在设置重新保存来源后重试。</p>}
-      <div className="drama-feed-list-meta"><p>{ranking ? '红果公开热播榜' : `${sourceLabel} · 来源片单`}{items.length > 0 ? ` · 本次 ${items.length} 部` : ''}</p><span>{ranking ? '按来源榜单顺序' : '按来源目录顺序，不代表热播排名'}</span></div>
+      <div className="drama-feed-list-meta"><p>{ranking ? catalogChannel === 'app' ? '红果 App 热播榜' : '红果官网热播榜' : `${sourceLabel} · 来源片单`}{items.length > 0 ? ` · 本次 ${items.length} 部` : ''}</p><span>{ranking ? '按来源榜单顺序' : '按来源目录顺序，不代表热播排名'}</span></div>
       {(loading || sourcesLoading) && items.length === 0 && <div className="drama-feed-state" role="status"><RefreshCw size={24} className="spin" /><p>{sourcesLoading ? '正在加载来源列表…' : '正在加载真实片单…'}</p>
         {loading && !sourcesLoading && <button className="btn btn-outline" onClick={cancelLoad}>取消加载</button>}
       </div>}
@@ -205,7 +220,7 @@ function DramaFeed({ active = true, onNavigate }) {
       {!loading && !sourcesLoading && !selected && <div className="drama-feed-state" role={error ? 'alert' : 'status'}>
         <Film size={32} /><h3>{error ? '暂时没能加载片单' : !source ? '暂无启用的来源，请在设置中添加' : '这个来源暂未返回剧集'}</h3>
         {error && <p>{error}</p>}
-        <p>可在上方切换来源，继续发现短剧。</p>
+        <p>{ranking ? '可在上方切换目录线路或来源，继续发现短剧。' : '可在上方切换来源，继续发现短剧。'}</p>
         <div className="drama-feed-actions"><button className="btn btn-primary" disabled={!source} onClick={() => loadList(true)}>重新加载</button>
           {onNavigate && <button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button>}</div>
       </div>}
@@ -235,7 +250,7 @@ function DramaFeed({ active = true, onNavigate }) {
             <DramaPoster item={item} /><span><strong>{item.series_title}</strong><small>{ranking && item.rank > 0 ? `榜单第 ${item.rank} 名` : `片单第 ${index + offset + 2} 部`}</small></span>
           </button>)}
         </div></div> : <p className="drama-feed-hint">已到本次片单末尾，换个来源，或摇一摇发现新故事。</p>}
-        <p className="drama-feed-source">{ranking ? '榜单来自红果公开页面，不是账号个性化推荐。' : `片单来自${sourceLabel}当前目录，不代表热播排名；播放以来源实际可用分集为准。`}</p>
+        <p className="drama-feed-source">{ranking ? `榜单来自${catalogChannel === 'app' ? '红果 App 目录' : '红果官网公开页面'}，不是账号个性化推荐。` : `片单来自${sourceLabel}当前目录，不代表热播排名；播放以来源实际可用分集为准。`}</p>
       </>}
     </>}
   </section>;

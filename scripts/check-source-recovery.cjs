@@ -10,7 +10,7 @@ const webPage = (vid = '11', sid = '1', extra = {}) => `<script>window._ROUTER_D
     publicVideoSeo: { available: true, itemId: vid, seriesId: sid }, ...extra },
 } })}</script><script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', url: `https://hongguoduanju.com/player/${sid}/${vid}`, contentUrl: media('web') })}</script>`;
 function load(file, dependencies) {
-  const context = { Buffer, URL, URLSearchParams, AbortSignal, process: { env: {} }, module: { exports: {} },
+  const context = { Buffer, URL, URLSearchParams, AbortSignal, AbortController, process: { env: {} }, module: { exports: {} },
     console: { warn() {} }, setTimeout: fn => fn(),
     require: name => Object.hasOwn(dependencies, name) ? dependencies[name] : require(name.startsWith('.') ? path.join(nativeDir, name) : name) };
   vm.runInNewContext(fs.readFileSync(path.join(nativeDir, file), 'utf8'), context);
@@ -136,7 +136,7 @@ const checks = [
     assert.deepEqual(apiTimeouts, [6000], 'legacy playback lookup must not repeat after timeout');
     webAvailable = true; webTimeouts.length = 0;
     assert.equal((await f.fetchEpisodeListFromWeb('1')).series_id, '1');
-    assert.deepEqual(webTimeouts, [30000], 'non-playback web defaults must stay unchanged');
+    assert.deepEqual(webTimeouts, [8000, 8000], 'episode page race bounds each web route');
   }],
   ['Web rejects wrong or missing current episode identity even when vid_list contains the request', async () => {
     for (const data of [

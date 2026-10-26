@@ -109,7 +109,7 @@ function searchModule() { assert.ok(fs.existsSync(file), 'bounded search module 
       { ...first, source: 'hema' },
     ], ' 双子 房客 ');
     assert.equal(result.length, 4);
-    assert.deepEqual(JSON.parse(JSON.stringify(result.map(item => [item.series_id, item.source, item.relevance]))), [[first.series_id, 'hongguo', 0], [first.series_id, 'hema', 0], [third.series_id, 'hongguo', 1], ['unrelated', 'hongguo', 2]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.map(item => [item.series_id, item.source, item.relevance]))), [[first.series_id, 'hongguo', 0], [first.series_id, 'hema', 0], [third.series_id, 'hongguo', 1], ['unrelated', 'hongguo', 3]]);
   });
   await check('real IPC supplements the selected source and exposes local-first sequel candidates', async () => {
     const mainPath = path.join(__dirname, '../main.js'), req = require('node:module').createRequire(mainPath);

@@ -7,9 +7,36 @@ import { Film, RefreshCw, ExternalLink, Download, Play, Check, X, Search } from 
 import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 import { rememberCatalogTitles } from '../searchHistory';
 
-const pageCache = new Map();
 const PAGE_CACHE_TTL_MS = 60_000;
 const LIST_TIMEOUT_MS = 25_000;
+const PAGE_CACHE_KEY = 'hongguo.catalog.page.v1';
+const CATALOG_CHANNEL_KEY = 'hongguo.catalog.channel.v1';
+const PAGE_CACHE_MAX = 8;
+const PAGE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function readPageCacheFile() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed = JSON.parse(localStorage.getItem(PAGE_CACHE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    const cutoff = Date.now() - PAGE_CACHE_MAX_AGE_MS;
+    return parsed.filter(entry => entry && typeof entry.key === 'string' && Array.isArray(entry.results)
+      && Number(entry.savedAt) >= cutoff).slice(0, PAGE_CACHE_MAX);
+  } catch (_) { return []; }
+}
+
+function readPersistedPage(key) {
+  return readPageCacheFile().find(entry => entry.key === key) || null;
+}
+
+function writePersistedPage(key, page) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const entries = readPageCacheFile().filter(entry => entry.key !== key);
+    entries.unshift({ key, ...page });
+    localStorage.setItem(PAGE_CACHE_KEY, JSON.stringify(entries.slice(0, PAGE_CACHE_MAX)));
+  } catch (_) { /* quota or disabled storage: memory cache still works */ }
+}
 
 /**
  * Browse —— 分类淘剧
@@ -22,6 +49,11 @@ const LIST_TIMEOUT_MS = 25_000;
  */
 function Browse({ onNavigate, active = true }) {
   const [source, setSource] = useState('hongguo');
+  const [catalogChannel, setCatalogChannel] = useState(() => {
+    try { return localStorage.getItem(CATALOG_CHANNEL_KEY) === 'web' ? 'web' : 'app'; }
+    catch (_) { return 'app'; }
+  });
+  const appCatalog = source === 'hongguo' && catalogChannel === 'app';
   const { sources: mediaSources, revision: sourceRevision, loading: sourcesLoading, error: sourcesError } = useMediaSources();
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState('real-drama');
@@ -45,16 +77,25 @@ function Browse({ onNavigate, active = true }) {
   const [submitting, setSubmitting] = useState(false);
   const detailRequest = useRef(0);
   const listRequest = useRef(0);
+  const loadingRequest = useRef(0);
+  const pageCache = useRef(new Map()).current;
+  const refreshFirstPage = useRef(false);
+  const viewRef = useRef({ source: '', category: '', channel: '', genre: '' });
   const listTimer = useRef(null);
   const toastTimer = useRef(null);
 
   const invalidateList = useCallback(() => {
     listRequest.current++;
+    loadingRequest.current = 0;
     clearTimeout(listTimer.current);
+    // A cleanup can invalidate a request without starting a replacement. Clear the
+    // skeleton here; a subsequent loadList immediately claims the token and shows it again.
+    setLoading(false);
   }, []);
 
   const cancelList = () => {
     invalidateList();
+    loadingRequest.current = 0;
     setLoading(false);
     setError('已取消加载，可重新加载或切换分类。');
   };
@@ -111,34 +152,64 @@ function Browse({ onNavigate, active = true }) {
     async (cat, gen, pg, forceRefresh = false) => {
       invalidateList();
       const request = listRequest.current;
-      const key = JSON.stringify([sourceRevision, source, cat, gen, pg]);
-      const cached = pageCache.get(key);
-      const fallbackUrl = source === 'hongguo'
+      const channel = source === 'hongguo' ? catalogChannel : '';
+      const key = JSON.stringify([sourceRevision, source, channel, cat, gen, pg]);
+      const persistedKey = JSON.stringify([source, cat, gen, pg]);
+      // The backend owns App page caching so cards cannot outlive their cursor session.
+      let cached = appCatalog ? null : pageCache.get(key);
+      const canPersist = !appCatalog && !source.startsWith('custom:');
+      // App pages depend on a live cursor; editable sources may change catalogs under the same ID.
+      if (!cached && canPersist) {
+        cached = readPersistedPage(persistedKey);
+        if (cached) pageCache.set(key, cached);
+      }
+      const sameView = viewRef.current.source === source && viewRef.current.category === cat && viewRef.current.channel === channel;
+      const sameQuery = sameView && viewRef.current.genre === gen;
+      viewRef.current = { source, category: cat, channel, genre: gen };
+      const fallbackUrl = source === 'hongguo' && catalogChannel === 'web'
         ? `https://hongguoduanju.com/${cat.startsWith('hot-') ? 'rank' : 'category'}/${encodeURIComponent(cat)}${gen ? `/${encodeURIComponent(gen)}` : ''}${pg > 1 ? `?page=${pg}` : ''}` : '';
       setUnsupported(false);
       setError('');
-      setResults(cached?.results || []);
-      setMeta(cached?.meta || { total: 0, totalPages: 0, genres: [] });
-      setSourceUrl(cached?.sourceUrl || fallbackUrl);
+      // Keep the current grid during a genre/page refresh instead of replacing it with skeletons.
+      if (cached) {
+        setResults(cached.results);
+        setMeta({ ...cached.meta, page: pg });
+        setSourceUrl(cached.sourceUrl || fallbackUrl);
+      } else {
+        setResults(prev => sameView ? prev : []);
+        setMeta(prev => sameView ? prev : { total: 0, totalPages: 0, genres: [] });
+        setSourceUrl(prev => sameView ? prev : fallbackUrl);
+      }
       if (!forceRefresh && cached && Date.now() - cached.savedAt < PAGE_CACHE_TTL_MS) {
         setLoading(false);
         return;
       }
       setLoading(true);
+      // A new query or App first-page request may replace the old cursor chain even without forceRefresh.
+      if (!sameQuery || (appCatalog && (forceRefresh || pg === 1))) setMeta(prev => ({ ...prev, cursorExpired: true }));
+      loadingRequest.current = request;
       listTimer.current = setTimeout(() => {
-        if (request !== listRequest.current) return;
+        // A cleanup can invalidate the request without starting another load (e.g. while
+        // source metadata is still loading). Never leave the skeleton spinning forever.
+        if (loadingRequest.current !== request) return;
+        loadingRequest.current = 0;
         invalidateList();
         setLoading(false);
         setError(cached ? '刷新超时，仍显示上次片单；可重试或切换分类。' : '加载超时，请重试或切换分类。');
       }, LIST_TIMEOUT_MS);
       try {
-        const res = await window.electronAPI.browseList({ source, category: cat, genre: gen, page: pg, forceRefresh });
+        const res = await window.electronAPI.browseList({ source, category: cat, genre: gen, page: pg, forceRefresh,
+          ...(source === 'hongguo' ? { catalogChannel } : {}), ...(appCatalog ? { catalogScope: 'browse' } : {}) });
         if (request !== listRequest.current) return;
         setSourceUrl(res?.sourceUrl || fallbackUrl);
+        if (appCatalog && res?.code === 'APP_CURSOR') {
+          setMeta(prev => ({ ...prev, cursorExpired: true }));
+          throw new Error('分页记录已失效，请点击“刷新片单”返回第一页。');
+        }
         if (!res?.success) throw new Error(res?.error || '来源暂时不可用');
         const next = {
           results: Array.isArray(res.results) ? res.results : [],
-          meta: { total: res.total || 0, totalPages: res.totalPages || 0, genres: res.genres || [], hasMore: res.hasMore === true },
+          meta: { page: pg, total: res.total || 0, totalPages: res.totalPages || 0, genres: res.genres || [], hasMore: res.hasMore === true },
           sourceUrl: res.sourceUrl || fallbackUrl,
           savedAt: Date.now(),
         };
@@ -150,25 +221,29 @@ function Browse({ onNavigate, active = true }) {
         setMeta(next.meta);
         setSourceUrl(next.sourceUrl);
         if (next.results.length) {
-          pageCache.delete(key);
-          pageCache.set(key, next);
-          if (pageCache.size > 24) pageCache.delete(pageCache.keys().next().value);
+          if (!appCatalog) {
+            pageCache.delete(key);
+            pageCache.set(key, next);
+            if (canPersist) writePersistedPage(persistedKey, next);
+            if (pageCache.size > 24) pageCache.delete(pageCache.keys().next().value);
+          }
         } else {
-          pageCache.delete(key);
+          if (!appCatalog) pageCache.delete(key);
           setUnsupported(res.unsupported === true);
           setError(res.emptyMessage || '这一页没有取到内容，可重新加载或换分类。');
         }
       } catch (e) {
         if (request !== listRequest.current) return;
-        setError(`${cached ? '刷新失败，仍显示上次片单' : '加载失败'}：${e.message || '请重试'}`);
+        setError(`${sameView && !sameQuery ? '加载失败，仍显示切换前片单' : cached ? '刷新失败，仍显示上次片单' : '加载失败'}：${e.message || '请重试'}`);
       } finally {
-        if (request === listRequest.current) {
+        if (loadingRequest.current === request) {
+          loadingRequest.current = 0;
           clearTimeout(listTimer.current);
           setLoading(false);
         }
       }
     },
-    [invalidateList, source, sourceRevision]
+    [invalidateList, source, sourceRevision, catalogChannel, appCatalog, pageCache]
   );
 
   useEffect(() => {
@@ -184,14 +259,38 @@ function Browse({ onNavigate, active = true }) {
   }, [sourceRevision, mediaSources, invalidateList, closeDetail]);
 
   useEffect(() => {
-    if (active && !sourcesLoading && mediaSources.some(item => item.id === source)) loadList(category, genre, page);
+    if (active && !sourcesLoading && mediaSources.some(item => item.id === source)) {
+      const forceRefresh = refreshFirstPage.current;
+      refreshFirstPage.current = false;
+      loadList(category, genre, page, forceRefresh);
+    }
     return invalidateList;
   }, [active, category, genre, page, loadList, sourcesLoading, mediaSources, invalidateList]);
+
+  const refreshList = () => {
+    if (appCatalog && page > 1) {
+      invalidateList();
+      refreshFirstPage.current = true;
+      setPage(1);
+    } else return loadList(category, genre, page, true);
+  };
+
+  const switchCatalogChannel = (next) => {
+    if (!['app', 'web'].includes(next) || next === catalogChannel) return;
+    invalidateList(); closeDetail();
+    refreshFirstPage.current = false;
+    setCatalogChannel(next);
+    setGenre(''); setPage(1); setCompletion('all');
+    setResults([]); setMeta({ total: 0, totalPages: 0, genres: [] });
+    setSourceUrl(''); setError(''); setUnsupported(false);
+    try { localStorage.setItem(CATALOG_CHANNEL_KEY, next); } catch (_) { /* selection still works for this launch */ }
+  };
 
   const switchSource = (next) => {
     if (next === source) return;
     invalidateList();
     closeDetail();
+    refreshFirstPage.current = false;
     setSource(next);
     setCategory('real-drama');
     setGenre('');
@@ -219,13 +318,17 @@ function Browse({ onNavigate, active = true }) {
     setError('');
     setGenre(slug);
     setPage(1);
-    setResults([]);
+    // loadList keeps the previous grid visible until the new genre arrives.
   };
 
   const gotoPage = (p) => {
-    const max = meta.totalPages || (source !== 'hongguo' ? page + (meta.hasMore ? 1 : 0) : 1);
+    if (meta.cursorExpired) return;
+    const max = meta.totalPages || (meta.page || page) + (meta.hasMore ? 1 : 0);
     const next = Math.min(Math.max(1, p), max);
-    if (next === page) return;
+    if (next === page) {
+      if (error) loadList(category, genre, next);
+      return;
+    }
     invalidateList();
     setError('');
     setPage(next);
@@ -339,11 +442,13 @@ function Browse({ onNavigate, active = true }) {
   useDialogKeyboard(active && (!!detail || detailLoading), closeDetail, '.browse-drawer');
 
   const visibleResults = completion === 'all' ? results : results.filter((item) => item.completion_status === completion);
+  // Keep the label and navigation anchored to the cards that actually loaded.
+  const displayedPage = meta.page || page;
   const totalPages = meta.totalPages || 0;
   const pageNumbers = useMemo(() => {
     if (!totalPages) return [];
     const out = [];
-    const cur = page;
+    const cur = displayedPage;
     const push = (n) => {
       if (n >= 1 && n <= totalPages && !out.includes(n)) out.push(n);
     };
@@ -351,7 +456,7 @@ function Browse({ onNavigate, active = true }) {
     for (let i = cur - 1; i <= cur + 1; i++) push(i);
     push(totalPages);
     return out.sort((a, b) => a - b);
-  }, [totalPages, page]);
+  }, [totalPages, displayedPage]);
 
   return (
     <div className="browse-container">
@@ -361,15 +466,18 @@ function Browse({ onNavigate, active = true }) {
         </div>
         <div className="browse-header-right">
           <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select></label>
+          {source === 'hongguo' && <label className="source-control">目录线路<select className="input-field" aria-label="红果目录线路" value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">App（快速）</option><option value="web">官网</option></select></label>}
           <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />搜索短剧</button>
-          <button className="btn btn-outline" disabled={loading || sourcesLoading} onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />刷新片单</button>
+          <button className="btn btn-outline" disabled={loading || sourcesLoading} onClick={refreshList}><RefreshCw size={15} />刷新片单</button>
           {meta.total > 0 && <span className="browse-stat">共 {meta.total} 部</span>}
-          {source === 'hongguo' && sourceUrl && <button className="btn btn-outline" onClick={showBrowser}>
+          {source === 'hongguo' && catalogChannel === 'web' && sourceUrl && <button className="btn btn-outline" onClick={showBrowser}>
             <ExternalLink size={15} />
             打开来源页面
           </button>}
         </div>
       </div>
+
+      {source === 'hongguo' && <p className="browse-source-note">App 与官网的榜单、题材划分可能不同。{appCatalog && '刷新将回到第一页。'}</p>}
 
       {/* 分类 tab */}
       {source === 'hongguo' && [false, true].map(ranking => {
@@ -428,9 +536,9 @@ function Browse({ onNavigate, active = true }) {
       {!loading && !error && results.length > 0 && visibleResults.length === 0 && <div className="browse-filter-empty" role="status"><p>本页没有明确标记为{completion === 'completed' ? '已完结' : '更新中'}的剧集。</p><button className="btn btn-outline" onClick={() => setCompletion('all')}>显示本页全部</button></div>}
 
       {error && results.length > 0 && <div className="alert alert-error browse-update-error" role="alert">
-        <span>{error}</span><button className="btn btn-outline btn-sm" disabled={loading || sourcesLoading} onClick={() => loadList(category, genre, page, true)}>重试</button>
+        <span>{error}</span><button className="btn btn-outline btn-sm" disabled={loading || sourcesLoading} onClick={refreshList}>重试</button>
       </div>}
-      {error && results.length === 0 && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
+      {error && results.length === 0 && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={refreshList}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
 
       {loading && results.length > 0 && <div className="browse-loading" role="status"><RefreshCw size={18} className="spin" /><span>正在更新片单，仍可浏览上次结果…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div>}
 
@@ -489,23 +597,24 @@ function Browse({ onNavigate, active = true }) {
       {/* 分页 */}
       {totalPages > 1 && (
         <div className="browse-pager">
-          <button className="pager-item" aria-label="上一页" disabled={page <= 1} onClick={() => gotoPage(page - 1)}>‹</button>
+          <button className="pager-item" aria-label="上一页" disabled={displayedPage <= 1 || meta.cursorExpired} onClick={() => gotoPage(displayedPage - 1)}>‹</button>
           {pageNumbers.map((n, i) => (
             <React.Fragment key={n}>
               {i > 0 && n - pageNumbers[i - 1] > 1 && <span className="pager-gap">…</span>}
               <button
-                className={`pager-item ${n === page ? 'active' : ''}`}
+                className={`pager-item ${n === displayedPage ? 'active' : ''}`}
+                disabled={meta.cursorExpired}
                 onClick={() => gotoPage(n)}
               >
                 {n}
               </button>
             </React.Fragment>
           ))}
-          <button className="pager-item" aria-label="下一页" disabled={page >= totalPages} onClick={() => gotoPage(page + 1)}>›</button>
+          <button className="pager-item" aria-label="下一页" disabled={displayedPage >= totalPages || meta.cursorExpired} onClick={() => gotoPage(displayedPage + 1)}>›</button>
         </div>
       )}
 
-      {source !== 'hongguo' && !totalPages && (page > 1 || meta.hasMore) && <div className="browse-pager"><button className="pager-item" disabled={page <= 1 || loading} onClick={() => gotoPage(page - 1)}>上一页</button><span>第 {page} 页</span><button className="pager-item" disabled={!meta.hasMore || loading} onClick={() => gotoPage(page + 1)}>下一页</button></div>}
+      {!totalPages && (displayedPage > 1 || meta.hasMore) && <div className="browse-pager"><button className="pager-item" disabled={displayedPage <= 1 || loading || meta.cursorExpired} onClick={() => gotoPage(displayedPage - 1)}>上一页</button><span>第 {displayedPage} 页</span><button className="pager-item" disabled={!meta.hasMore || loading || meta.cursorExpired} onClick={() => gotoPage(displayedPage + 1)}>下一页</button></div>}
 
       {/* ===== 剧集详情抽屉 ===== */}
       {(detail || detailLoading) && (

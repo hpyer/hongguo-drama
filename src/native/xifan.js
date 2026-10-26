@@ -106,13 +106,18 @@ async function detail(seriesId) {
   return result;
 }
 
+function episodeDisplayTitle(seriesId, seriesTitle, title) {
+  // shortcut: 仅兼容已核实的上游元数据冲突；上游改名后保留新值，其他别名不猜测。
+  return seriesId === 'xifan:jiuzhou:253' && seriesTitle === '天龙战神' && title === '爱归良辰' ? '' : title;
+}
+
 async function fetchEpisodeList(seriesId) {
   const result = await detail(seriesId);
   const series_title = plainText(result.title) || '未命名短剧';
   const cover = httpsUrl(result.coverImageUrl);
   const episodes = result.episodeList.filter(episode => ID.test(String(episode.episodeId || ''))).map(episode => ({
     vid: `${seriesId}:${episode.episodeId}`, vid_index: Number(episode.index) || 0,
-    title: plainText(episode.title), series_id: seriesId, series_title, cover,
+    title: episodeDisplayTitle(seriesId, series_title, plainText(episode.title)), series_id: seriesId, series_title, cover,
     locked: episode.unlock !== true, source: 'xifan',
   })).sort((a, b) => a.vid_index - b.vid_index);
   if (!episodes.length) throw new Error('西饭分集列表为空');
@@ -135,4 +140,4 @@ async function fetchPlayUrlSingle(vid, sid) {
   } catch (error) { return { url: null, spadeA: null, codec: null, source: 'xifan', error: error.message }; }
 }
 
-module.exports = { browseList, search, fetchEpisodeList, fetchPlayUrlSingle };
+module.exports = { browseList, search, fetchEpisodeList, fetchPlayUrlSingle, episodeDisplayTitle };

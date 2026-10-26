@@ -58,6 +58,7 @@ function parseSearchPayload(payload, { page = 1 } = {}) {
       series_title: title,
       cover: appCover(video?.cover),
       episode_count: Number(video?.episode_cnt ?? video?.episode_count ?? 0) || 0,
+      description: cleanTitle(video?.series_intro || video?.video_desc || cell?.series_intro || ''),
       source: 'hongguo',
       url: `https://hongguoduanju.com/detail?series_id=${seriesId}`,
     });

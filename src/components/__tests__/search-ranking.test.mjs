@@ -15,7 +15,7 @@ test('punctuation differences still rank as a title match', () => {
   ], '言出法随 诸天万界 我说了算');
   assert.equal(ranked[0].series_id, '1');
   assert.equal(ranked[0].relevance, 0);
-  assert.equal(ranked[1].relevance, 2);
+  assert.equal(ranked[1].relevance, 3);
 });
 
 test('partial titles rank between exact and unrelated results', () => {
@@ -25,7 +25,7 @@ test('partial titles rank between exact and unrelated results', () => {
     { source: 'hongguo', series_id: '3', series_title: '恶犬' },
   ], '恶犬');
   assert.deepEqual(ranked.map(item => item.series_id), ['3', '2', '1']);
-  assert.deepEqual(ranked.map(item => item.relevance), [0, 1, 2]);
+  assert.deepEqual(ranked.map(item => item.relevance), [0, 1, 3]);
 });
 
 test('duplicates are dropped per source and missing titles are ignored', () => {
@@ -46,6 +46,18 @@ test('fuzzy results sort before unrelated results but after title matches', () =
     { source: 'hongguo', series_id: '3', series_title: '目标剧名' },
   ], '目标剧名');
   assert.deepEqual(ranked.map(item => item.series_id), ['3', '2', '1']);
-  assert.equal(ranked[1].relevance, 2);
+  assert.equal(ranked[1].relevance, 3);
   assert.equal(ranked[1].fuzzy, true);
+});
+
+
+test('content matches rank after title matches but before unrelated results', () => {
+  const ranked = rankSearchResults([
+    { source: 'hongguo', series_id: '1', series_title: '完全无关的剧' },
+    { source: 'hongguo', series_id: '2', series_title: '工地前的一碗盒饭', series_intro: '这道菜吃了不烧心，工友都喜欢。' },
+    { source: 'hongguo', series_id: '3', series_title: '不烧心的烧烤摊' },
+  ], '烧心');
+  assert.deepEqual(ranked.map(item => item.series_id), ['3', '2', '1']);
+  assert.deepEqual(ranked.map(item => item.relevance), [1, 2, 3]);
+  assert.equal(ranked[1].contentMatch, true);
 });

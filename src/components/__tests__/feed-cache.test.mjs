@@ -4,6 +4,16 @@ import { FEED_CACHE_LIMIT, clearFeedCache, feedCacheKey, readFeedCache, writeFee
 
 const item = id => ({ series_id: String(id), series_title: `剧${id}` });
 
+test('feed cache separates App and website while other sources keep one catalog', () => {
+  clearFeedCache();
+  writeFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama', 'app'), [item(1)]);
+  assert.equal(readFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama', 'web')), null);
+  writeFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama', 'web'), [item(2)]);
+  assert.deepEqual(readFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama')).items, [item(1)]);
+  assert.deepEqual(readFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama', 'web')).items, [item(2)]);
+  assert.equal(feedCacheKey(1, 'xifan', 'hot-drama', 'app'), feedCacheKey(1, 'xifan', 'hot-drama', 'web'));
+});
+
 test('feed cache is isolated by source revision, source and category', () => {
   clearFeedCache();
   writeFeedCache(feedCacheKey(1, 'hongguo', 'hot-drama'), [item(1)], 1000);

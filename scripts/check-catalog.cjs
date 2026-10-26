@@ -14,10 +14,78 @@ const html = (category = 'real-drama', page = 1, list) => `<script>_ROUTER_DATA 
   pagination: { pageNum: page, total: 800, totalPages: 34 }, selectorList: [{ items: [{ selector_item_id: 'romance', show_name: '爱情' }] }],
 } } })};function runWindowFn(){throw Error('must not execute remote scripts')}</script>`;
 
+async function checkRankingRoutes() {
+  const rankingHtml = '<article><h2 id="rank-title-1234567">热播测试</h2><a href="/detail?series_id=1234567">详情</a><span>1</span></article>';
+  const failures = [];
+  for (const allowTrustedDns of [true, false]) {
+    let netAborted = false, axiosCalls = 0;
+    const context = { module: { exports: {} }, Buffer, URL, AbortController, clearTimeout,
+      setTimeout: (fn, ms) => setTimeout(fn, ms / 100),
+      require: name => {
+        if (name === 'electron') return { net: { request: () => {
+          const request = new EventEmitter(); let timer;
+          request.abort = () => { netAborted = true; clearTimeout(timer); };
+          request.end = () => { timer = setTimeout(() => {
+            const response = new EventEmitter(); response.statusCode = 200; response.headers = {};
+            request.emit('response', response);
+            response.emit('data', Buffer.from(allowTrustedDns ? '<html>CDN error</html>' : rankingHtml));
+            response.emit('end');
+          }, allowTrustedDns ? 1 : 40); };
+          return request;
+        } } };
+        if (name === './web-media-guard') return { webMediaRequestOptions: () => ({}) };
+        if (name === 'axios') return { get: (_url, { signal }) => {
+          axiosCalls++;
+          if (!allowTrustedDns) return Promise.reject(new Error('direct route unavailable'));
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => resolve({ data: rankingHtml }), 10);
+            signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('canceled')); }, { once: true });
+          });
+        } };
+        return require(name);
+      } };
+    vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
+    const result = await context.module.exports.browseList({ category: 'hot-drama', allowTrustedDns });
+    try {
+      assert.equal(result.success, true, `${allowTrustedDns ? 'invalid fast page must not cancel valid ranking' : 'valid 4-second proxy route must finish'}: ${result.error}`);
+      assert.equal(result.results[0].series_title, '热播测试');
+      if (!allowTrustedDns) { assert.equal(netAborted, false); assert.equal(axiosCalls, 0, 'proxy route must not silently switch to direct'); }
+    } catch (error) { failures.push(error.message); }
+  }
+  assert.equal(failures.length, 0, failures.join('\n'));
+  console.log('PASS ranking routes: valid page wins; slow proxy preserved without direct fallback');
+}
+
+async function checkBrowseBudget() {
+  let handler, calls = 0, mode = 'direct', lastOptions;
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const context = { ipcMain: { handle: (_name, callback) => { handler = callback; } }, proxyStartupFallback: false,
+    getCurrentSettings: () => ({}), resolveProxyConfig: () => ({ mode }),
+    setTimeout: fn => setTimeout(fn, 0),
+    require: () => ({ browseList: async options => { calls++; lastOptions = options; return { success: false, error: '目录加载超时，请重试' }; } }) };
+  vm.runInNewContext(main.slice(main.indexOf("ipcMain.handle('browse-list'"), main.indexOf('const normalizeSearchTitle')), context);
+  assert.equal((await handler({}, { catalogChannel: 'web' })).success, false);
+  assert.equal(calls, 1, 'a full catalog timeout must not start another 10-second operation');
+  assert.equal(lastOptions.allowTrustedDns, true);
+  for (mode of ['system', 'custom']) {
+    await handler({}, { catalogChannel: 'web', allowTrustedDns: true });
+    assert.equal(lastOptions.allowTrustedDns, false, 'renderer options must not bypass the selected proxy');
+  }
+  const warmup = main.slice(main.indexOf('// Warm the official-host'), main.indexOf("startupStage = '创建主窗口'"));
+  for (const [route, fallback, expected] of [['direct', false, 1], ['system', false, 0], ['custom', false, 0], ['direct', true, 0]]) {
+    let warmed = 0;
+    vm.runInNewContext(warmup, { proxyStartupFallback: fallback, getCurrentSettings: () => ({}),
+      resolveProxyConfig: () => ({ mode: route }), require: () => ({ warmOfficialDns: () => { warmed++; } }) });
+    assert.equal(warmed, expected, `DNS warmup must respect ${route} routing and startup fallback=${fallback}`);
+  }
+  console.log('PASS browse budget: no second timeout window');
+}
+
 async function checkBrowserTransport() {
   const calls = [];
   let cancelled = false;
   let respond = async () => new Response(html());
+  let axiosHtml = null;
   const context = { module: { exports: {} }, require: name => {
     if (name === 'electron') return { net: { request: options => {
       const request = new EventEmitter();
@@ -34,9 +102,10 @@ async function checkBrowserTransport() {
       };
       calls.push({ url: options.url, options, request }); return request;
     } } };
-    if (name === 'axios') return { get: async () => { throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }); } };
+    if (name === 'axios') return { get: async () => { if (axiosHtml) return { data: axiosHtml }; throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }); } };
+    if (name === './web-media-guard') return { webMediaRequestOptions: () => ({}) };
     return require(name);
-  }, Buffer, AbortController, URL, setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 40 : ms), clearTimeout };
+  }, Buffer, AbortController, URL, setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 80 : ms === 3000 ? 20 : ms), clearTimeout };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   const { browseList } = context.module.exports;
   const result = await browseList();
@@ -57,6 +126,14 @@ async function checkBrowserTransport() {
   const ranking = await browseList({ category: 'hot-drama' });
   assert.equal(ranking.success, true);
   assert.equal(ranking.results[0].series_title, '热播测试');
+
+  respond = () => new Promise(() => {});
+  axiosHtml = html();
+  const fallback = await browseList({ forceRefresh: true, allowTrustedDns: true });
+  assert.equal(fallback.success, true, `slow Chromium route must fall back to trusted DNS: ${fallback.error}`);
+  assert.equal(fallback.results[0].series_title, '示例剧');
+  assert.equal(calls.at(-1).request.aborted, true, 'winning trusted route must cancel stalled Chromium request');
+  axiosHtml = null;
 
   respond = async () => new Response('unavailable', { status: 503 });
   assert.match((await browseList({ forceRefresh: true })).error, /503/);
@@ -80,6 +157,8 @@ async function checkBrowserTransport() {
 }
 
 async function main() {
+  await checkBrowseBudget();
+  await checkRankingRoutes();
   await checkBrowserTransport();
   if (!fs.existsSync(file)) {
     // Exercise the old real queue, with comic navigation stalled and real-drama ready.
@@ -102,7 +181,7 @@ async function main() {
   let response = (url) => url.endsWith('/comic') ? comic.promise : Promise.resolve({ data: html('real-drama', url.includes('page=2') ? 2 : 1) });
   const context = { module: { exports: {} }, require: name => name === 'axios' ? { get: (url, options) => {
     calls.push({ url, options }); return response(url);
-  } } : require(name), AbortController, setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 40 : ms), clearTimeout, URL, console };
+  } } : name === './web-media-guard' ? { webMediaRequestOptions: () => ({}) } : require(name), AbortController, setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 80 : ms === 3000 ? 20 : ms), clearTimeout, URL, console };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   const { browseList } = context.module.exports;
   const slowComic = browseList({ category: 'comic' });

@@ -177,7 +177,7 @@ function normalizeVideoUrl(raw) {
 }
 
 /** 拉取官网页面 HTML */
-async function fetchSiteHtml(url, timeout = 30000) {
+async function fetchSiteHtml(url, timeout = 30000, signal) {
   const res = await axios.get(url, {
     headers: {
       'User-Agent': WEB_UA,
@@ -188,6 +188,7 @@ async function fetchSiteHtml(url, timeout = 30000) {
     timeout,
     responseType: 'text',
     maxRedirects: 5,
+    signal,
   });
   return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
 }
@@ -196,11 +197,11 @@ async function fetchSiteHtml(url, timeout = 30000) {
  * 从官网 player 页内嵌 JSON 取完整分集列表
  * vid_list 按下标即集数顺序（下标 i → 第 i+1 集）
  */
-async function fetchEpisodeListFromWeb(seriesId) {
-  const html = await fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(seriesId)}`);
+function parseEpisodeListHtml(html, seriesId) {
   const router = require('./catalog').readRouterData(html);
   const data = router.loaderData?.['player_(series_id)/page']
-    ?? router.loaderData?.['player_(series_id)/(vid)/page'];
+    ?? router.loaderData?.['player_(series_id)/(vid)/page']
+    ?? router.loaderData?.detail_page;
   const detail = data?.seriesDetail;
   // Read identity and episodes from the same current-player object, never recommendations.
   if (!data || data.isSuccess === false || !/^\d{1,30}$/.test(String(detail?.series_id || '')) ||
@@ -407,6 +408,30 @@ async function fetchEpisodeList(seriesId) {
   if (String(seriesId).startsWith('hema:')) return require('./hema').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('xifan:')) return require('./xifan').fetchEpisodeList(seriesId);
   return cachedRequest(`episodes:${seriesId}`, 60000, () => fetchEpisodeListFresh(seriesId));
+}
+
+async function fetchEpisodeListFromWeb(seriesId) {
+  // Some /player pages are served from a broken CDN edge (hang then abort), while the
+  // detail route for the same series is healthy. Race both; parse whichever is valid.
+  const id = String(seriesId);
+  const race = async (timeout) => {
+    const controller = new AbortController();
+    const attempts = [
+      () => fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(id)}`, timeout, controller.signal),
+      () => fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, timeout, controller.signal),
+    ].map(run => run().then(html => parseEpisodeListHtml(html, id)));
+    attempts.forEach(promise => promise.catch(() => {}));
+    try { return await Promise.any(attempts); }
+    catch (aggregate) { throw aggregate.errors?.[0] || aggregate; }
+    finally { controller.abort(); }
+  };
+  try { return await race(8000); }
+  catch (first) {
+    // The bad edge is intermittent: retry the detail route once after a short delay.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    try { return parseEpisodeListHtml(await fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, 10000), id); }
+    catch (second) { throw new Error(`${first.message}；重试失败：${second.message}`); }
+  }
 }
 
 async function fetchEpisodeListFresh(seriesId) {

@@ -5,8 +5,8 @@ export const FEED_CACHE_LIMIT = 24;
 
 const cache = new Map();
 
-export function feedCacheKey(revision, source, category) {
-  return `${revision}\u0000${source}\u0000${category}`;
+export function feedCacheKey(revision, source, category, catalogChannel = 'app') {
+  return `${revision}\u0000${source}\u0000${category}\u0000${source === 'hongguo' ? catalogChannel : ''}`;
 }
 
 export function readFeedCache(key) {

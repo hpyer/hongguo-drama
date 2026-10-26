@@ -79,15 +79,8 @@ async function check() {
   const browse = fs.readFileSync(path.join(root, 'src/components/Browse.jsx'), 'utf8');
   assert.match(browse, /mediaSources\.map\(\(\{ id, label \}\) => <option key=\{id\} value=\{id\}>\{label\}<\/option>\)/);
   assert.match(fs.readFileSync(path.join(root, 'src/components/mediaSourcesModel.mjs'), 'utf8'), /id: 'hema', label: '河马短剧'/);
-  assert.match(browse, /source !== 'hongguo' && !totalPages && \(page > 1 \|\| meta.hasMore\)/);
   assert.match(browse, /西饭热播榜暂未接入/);
-  const paging = browse.slice(browse.indexOf('  const gotoPage ='), browse.indexOf('  // ===== 打开某部剧'));
-  for (const source of ['hema', 'xifan']) {
-    let selectedPage = 1;
-    vm.runInNewContext(paging + '\ngotoPage(2);', { source, page: 1, meta: {hasMore:true,totalPages:0},
-      invalidateList() {}, setError() {}, setPage(value) { selectedPage = value; }, document: {querySelector:()=>null} });
-    assert.equal(selectedPage, 2, source + ' 下一页必须改变当前页码');
-  }
+  // Rendered pagination is covered with the actual component in check-ui-state.cjs.
 
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const routeStart = main.indexOf("ipcMain.handle('browse-list'");
@@ -97,14 +90,20 @@ async function check() {
   let handler;
   vm.runInNewContext(main.slice(routeStart, routeEnd), {
     ipcMain: { handle: (_channel, callback) => { handler = callback; } },
+    proxyStartupFallback: false,
+    getCurrentSettings: () => ({ proxy_enabled: false }),
+    resolveProxyConfig: () => ({ mode: 'direct' }),
     require: name => ({ browseList: options => ({ name, options }) }),
   });
   for (const source of ['hema', 'xifan', 'hongguo']) {
     const options = { source, genre: '1129', page: 2 };
     const routed = await handler({}, options);
-    assert.equal(routed.name, `./src/native/${source === 'hongguo' ? 'catalog' : source}`, '主控须补齐河马 IPC 分流');
-    assert.equal(routed.options, options);
+    assert.equal(routed.name, `./src/native/${source === 'hongguo' ? 'hongguo-app-catalog' : source}`, '目录须按来源分流，红果默认使用 App');
+    assert.deepEqual(routed.options, options);
   }
+  const website = await handler({}, { source: 'hongguo', catalogChannel: 'web' });
+  assert.equal(website.name, './src/native/catalog');
+  assert.equal(website.options.allowTrustedDns, true, '显式官网线路保留直连 DNS 选项');
   console.log('PASS 河马公开目录、题材白名单、组合题材、分页、刷新、异常与发现页入口；无榜单/热度伪造');
 }
 

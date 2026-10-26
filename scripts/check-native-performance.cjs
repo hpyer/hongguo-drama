@@ -10,12 +10,18 @@ const page = `<script>window._ROUTER_DATA=${JSON.stringify({ loaderData: {
     publicVideoSeo: { available: true, itemId: '11', seriesId: '1' } },
 } })}</script><script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', url: 'https://hongguoduanju.com/player/1/11', contentUrl: 'https://media.example/video.mp4' })}</script>`;
 
-function fixture({ web = true, api = false, app = false, blockedVids = [], html = page } = {}) {
+function fixture({ web = true, api = false, app = false, blockedVids = [], html = page, stalledPlayer = false } = {}) {
   let now = 0;
-  const state = { web, api, app, get: 0, post: 0, appCalls: 0, waits: 0 };
+  const state = { web, api, app, get: 0, post: 0, appCalls: 0, waits: 0, playerCancelled: false };
   const axios = {
-    async get(url) {
+    async get(url, options) {
       state.get++;
+      if (stalledPlayer && url.endsWith('/player/1')) return new Promise((_, reject) => {
+        options.signal.addEventListener('abort', () => {
+          state.playerCancelled = true;
+          reject(new Error('cancelled'));
+        }, { once: true });
+      });
       if (!state.web || blockedVids.some(vid => url.endsWith(`/${vid}`))) throw new Error('web unavailable');
       return { data: html };
     },
@@ -29,7 +35,7 @@ function fixture({ web = true, api = false, app = false, blockedVids = [], html 
     },
   };
   const context = {
-    module: { exports: {} }, Buffer, process: { env: {} },
+    module: { exports: {} }, Buffer, AbortController, process: { env: {} },
     require: name => name === 'axios' ? axios : name === './app-source' ? { fetchAppPlayUrl: async () => { state.appCalls++; if (!state.app) throw Error('app unavailable'); return { url: 'https://media.example/app.mp4', contentKey: '01'.repeat(16), source: 'app' }; } } : require(name.startsWith('.') ? path.join(path.dirname(sourcePath), name) : name),
     Date: class extends Date { static now() { return now; } },
     setTimeout: fn => { state.waits++; fn(); },
@@ -55,7 +61,16 @@ const checks = [
     assert.equal(results[0].total, 2);
     await native.fetchEpisodeList('1');
     assert.equal(state.post, 0, '有效网页不应等待 API');
-    assert.equal(state.get, 1, '相同分集只取一次');
+    assert.equal(state.waits, 0, '正常竞速不能因测试环境缺失而误入重试');
+    assert.equal(state.get, 2, '同一分集竞速的两条路径各取一次，重复调用复用结果');
+  }],
+  ['分集竞速采用有效详情并取消慢播放页', async () => {
+    const { native, state } = fixture({ stalledPlayer: true });
+    const result = await native.fetchEpisodeList('1');
+    assert.equal(result.total, 2);
+    assert.equal(state.playerCancelled, true, '详情成功后应取消仍在等待的播放页');
+    assert.equal(state.get, 2, '两条网页路径各请求一次');
+    assert.equal(state.waits, 0, '成功竞速不进入退避');
   }],
   ['播放地址网页优先、并发合并、短期复用', async () => {
     const { native, state } = fixture();
@@ -72,20 +87,20 @@ const checks = [
     advance(29999);
     await native.fetchEpisodeList('1');
     await native.fetchPlayUrlSingle('11', '1');
-    assert.equal(state.get, 2, '未到期不重复访问');
+    assert.equal(state.get, 3, '未到期不重复访问');
     advance(2);
     await native.fetchPlayUrlSingle('11', '1');
-    assert.equal(state.get, 3, '播放地址到期后刷新');
+    assert.equal(state.get, 4, '播放地址到期后刷新');
     advance(30000);
     await native.fetchEpisodeList('1');
-    assert.equal(state.get, 4, '分集到期后刷新');
+    assert.equal(state.get, 6, '分集到期后重新竞速两条网页路径');
   }],
-  ['空响应不退避重试，失败不缓存', async () => {
+  ['空响应不重试 API，网页详情失败只重试一次', async () => {
     const { native, state } = fixture({ web: false });
     await assert.rejects(native.fetchEpisodeList('1'));
     assert.equal((await native.fetchPlayUrlSingle('11', '1')).url, null);
     assert.equal(state.post, 2, '每个失败链路只访问一次空响应 API');
-    assert.equal(state.waits, 0, '空响应不进入重试等待');
+    assert.equal(state.waits, 1, '只有网页详情回退等待一次，API 空响应不进入退避重试');
     state.web = true;
     assert.equal((await native.fetchEpisodeList('1')).total, 2);
     assert.equal((await native.fetchPlayUrlSingle('11', '1')).source, 'web');

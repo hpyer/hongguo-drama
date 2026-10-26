@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { net } = require('electron');
+const { webMediaRequestOptions } = require('./web-media-guard');
 
 const SITE = 'https://hongguoduanju.com';
 const CATEGORIES = new Set(['real-drama', 'comic-drama', 'ai-drama', 'comic']);
@@ -143,11 +144,7 @@ function parseRanking(html, category, page, sourceUrl) {
     genres: [], pageTitle: text(String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ''), sourceUrl };
 }
 
-async function fetchCatalogPage(url, signal, proxyLogin) {
-  // Use the app's Chromium session, with proxy authentication but no site cookies.
-  if (!net?.request) return (await axios.get(url, {
-    timeout: TIMEOUT_MS, signal, responseType: 'text', maxContentLength: MAX_PAGE_BYTES,
-  })).data;
+async function fetchCatalogPageWithNet(url, signal, proxyLogin) {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, useSessionCookies: false, headers: { 'Cache-Control': 'no-cache' } });
     let settled = false;
@@ -183,6 +180,41 @@ async function fetchCatalogPage(url, signal, proxyLogin) {
   });
 }
 
+async function fetchCatalogPageWithTrustedDns(url, signal) {
+  // The system resolver can return a VPN Fake-IP whose CDN route hangs.
+  // Use the same trusted DoH/official-host path as media; only a public official URL is allowed.
+  const response = await axios.get(url, {
+    ...webMediaRequestOptions(url, { trustedOfficialDns: true }), timeout: TIMEOUT_MS, signal, responseType: 'text', maxContentLength: MAX_PAGE_BYTES,
+  });
+  return response.data;
+}
+
+async function fetchCatalogPage(url, signal, proxyLogin, allowTrustedDns, parse) {
+  if (!net?.request) {
+    const html = allowTrustedDns ? await fetchCatalogPageWithTrustedDns(url, signal) : (await axios.get(url, {
+      timeout: TIMEOUT_MS, signal, responseType: 'text', maxContentLength: MAX_PAGE_BYTES,
+    })).data;
+    return parse(html);
+  }
+  if (!allowTrustedDns) return parse(await fetchCatalogPageWithNet(url, signal, proxyLogin));
+
+  // Only a parsed page wins; a fast CDN error page must not cancel a healthy route.
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  try {
+    return await Promise.any([
+      fetchCatalogPageWithNet(url, controller.signal, proxyLogin).then(parse),
+      fetchCatalogPageWithTrustedDns(url, controller.signal).then(parse),
+    ]);
+  } catch (aggregate) {
+    throw aggregate.errors?.find(error => /HTTP \d+|超时/.test(error.message)) || aggregate.errors?.[0] || aggregate;
+  } finally {
+    signal.removeEventListener('abort', abort);
+    controller.abort();
+  }
+}
 async function browseList(options = {}, proxyLogin) {
   const { category = 'real-drama', genre = '', page = 1, forceRefresh = false } = options || {};
   const ranking = RANKINGS.has(category);
@@ -200,8 +232,8 @@ async function browseList(options = {}, proxyLogin) {
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('目录加载超时，请重试')); }, TIMEOUT_MS);
       });
-      const html = await Promise.race([fetchCatalogPage(url, controller.signal, proxyLogin), timeout]);
-      const data = (ranking ? parseRanking : parseCatalog)(html, category, pg, url);
+      const data = await Promise.race([fetchCatalogPage(url, controller.signal, proxyLogin, options.allowTrustedDns === true,
+        html => (ranking ? parseRanking : parseCatalog)(html, category, pg, url)), timeout]);
       cache.set(url, { expires: Date.now() + CACHE_MS, data });
       // Bound memory while retaining the latest category/filter pages.
       if (cache.size > 32) cache.delete(cache.keys().next().value);

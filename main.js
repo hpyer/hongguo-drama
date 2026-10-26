@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 3.4 下载器（独立版）主进程
+ * main.js - 红果短剧 3.5 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -1402,13 +1402,19 @@ ipcMain.handle('test-custom-source', async (_event,draft) => {
 });
 
 
-ipcMain.handle('browse-list', (_event, options) => {
+ipcMain.handle('browse-list', async (_event, options) => {
   if (proxyStartupFallback) return { success: false, error: '网络代理配置无效，请先在设置中修复或明确关闭代理。' };
-  return require(String(options?.source).startsWith('custom:') ? './src/native/custom-source' : options?.source === 'hema' ? './src/native/hema'
-    : options?.source === 'xifan' ? './src/native/xifan' : './src/native/catalog').browseList(options, (authInfo, callback) => {
-      if (matchesProxyAuth(authInfo)) callback(activeProxyAuth.username, activeProxyAuth.password);
-      else callback();
-    });
+  if ((!options?.source || options.source === 'hongguo') && options?.catalogChannel != null
+    && !['app', 'web'].includes(options.catalogChannel)) return { success: false, error: '不支持的红果目录线路' };
+  const moduleName = String(options?.source).startsWith('custom:') ? './src/native/custom-source' : options?.source === 'hema' ? './src/native/hema'
+    : options?.source === 'xifan' ? './src/native/xifan'
+      : options?.catalogChannel === 'web' ? './src/native/catalog' : './src/native/hongguo-app-catalog';
+  const catalogOptions = moduleName === './src/native/catalog'
+    ? { ...options, allowTrustedDns: resolveProxyConfig(getCurrentSettings()).mode === 'direct' } : options;
+  return require(moduleName).browseList(catalogOptions, (authInfo, callback) => {
+    if (matchesProxyAuth(authInfo)) callback(activeProxyAuth.username, activeProxyAuth.password);
+    else callback();
+  });
 });
 
 const normalizeSearchTitle = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -2229,7 +2235,8 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
         return {
           vid: ep.vid,
           vid_index: idx,
-          title: ep.title || '',
+          title: sid.startsWith('xifan:')
+            ? require('./src/native/xifan').episodeDisplayTitle(sid, seriesTitle, ep.title || '') : ep.title || '',
           web_available: ep.web_available ?? null,
           locked: ep.locked === true,
           taskId: t ? t.id : null,
@@ -3685,6 +3692,11 @@ ipcMain.handle('get-download-tasks', () => {
   });
   return sorted.map((task) => {
     const { cancelSource, writer, ...serializableTask } = task;
+    const info = task.hongguoInfo;
+    if (String(info?.series_id).startsWith('xifan:')
+      && require('./src/native/xifan').episodeDisplayTitle(info.series_id, info.series_title, info.ep_title) !== info.ep_title) {
+      serializableTask.title = `《${info.series_title}》第${String(info.vid_index).padStart(3, '0')}集`;
+    }
     if (task.status === 'completed' && !hasCompleteTaskFile(task)) {
       return { ...serializableTask, status: 'failed', progress: 0, qualityNotice: '', error: '本地文件已丢失或路径冲突，请重新下载' };
     }
@@ -4445,6 +4457,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
           { label: '退出隐身小窗', click: () => { stealth.setEnabled(false); syncMainWindowScale(); } },
         ] },
       ]));
+    }
+    // Warm the official-host trusted DNS cache before the first catalog card request.
+    // This is best-effort and must never block startup or a user action.
+    if (!proxyStartupFallback && resolveProxyConfig(getCurrentSettings()).mode === 'direct') {
+      try { require('./src/native/web-media-guard').warmOfficialDns?.(); } catch (_) {}
     }
     startupStage = '创建主窗口';
     createWindow();

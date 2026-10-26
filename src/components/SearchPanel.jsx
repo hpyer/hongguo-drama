@@ -123,6 +123,22 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
     setSearchedKeyword(kw);
     const sources = source === 'all' ? mediaSources.map(item => item.id) : [source];
     const settled = new Array(sources.length);
+    const publishPartial = () => {
+      if (request !== requestVersion.current) return;
+      const merged = [], nextMore = {};
+      sources.forEach((searchSource, index) => {
+        const entry = settled[index];
+        if (entry?.status !== 'fulfilled') return;
+        merged.push(...(entry.value.results || []).map(item => ({ ...item, source: searchSource })));
+        if (entry.value.channel && entry.value.channel !== 'dom' && entry.value.hasMore) {
+          nextMore[searchSource] = { channel: entry.value.channel, cursor: entry.value.cursor || null, page: entry.value.page || 1, hasMore: true };
+        }
+      });
+      if (merged.length) setResults(rankSearchResults(merged, kw));
+      if (sources.length === 1) setPageTitle(settled[0]?.value?.pageTitle || '');
+      // Do not offer pagination until every source has settled; otherwise the button can shift under the user.
+      if (sources.every((_, index) => settled[index])) setMore(nextMore);
+    };
     const applyResponses = (timedOut) => {
       const merged = [], failures = [], warnings = [], nextMore = {};
       sources.forEach((searchSource, index) => {
@@ -171,11 +187,13 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
           if (!res?.success) throw new Error(res?.error || '搜索失败，请重试');
           const entry = { status: 'fulfilled', value: res };
           settled[index] = entry;
+          publishPartial();
           return entry;
         })
         .catch(error => {
           const entry = { status: 'rejected', reason: error };
           settled[index] = entry;
+          publishPartial();
           throw error;
         })));
       if (request !== requestVersion.current) return;
@@ -196,6 +214,8 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
   // 选中某部剧 -> 拉取完整分集 -> 交给下载页
   const pick = async (item) => {
     const request = ++requestVersion.current;
+    pendingSearch.current = null;
+    setLoading(false);
     setPickingId(item.series_id);
     setError('');
     try {
@@ -267,8 +287,9 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
   };
 
   const matchedCount = results ? results.filter(item => item.relevance < 2).length : 0;
-  const fuzzyCount = results ? results.filter(item => item.relevance === 2 && item.fuzzy).length : 0;
-  const otherCount = results ? results.filter(item => item.relevance === 2 && !item.fuzzy).length : 0;
+  const contentCount = results ? results.filter(item => item.relevance === 2 && !item.fuzzy).length : 0;
+  const fuzzyCount = results ? results.filter(item => item.fuzzy).length : 0;
+  const otherCount = results ? results.filter(item => item.relevance > 2 && !item.fuzzy).length : 0;
 
   return (
     <div className="hongguo-card">
@@ -352,7 +373,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
 
       {results && results.length > 0 && (
         <>
-          <div className="search-count">找到 {matchedCount} 部标题匹配短剧{fuzzyCount ? `，另有 ${fuzzyCount} 部补搜结果` : ''}{otherCount ? `，另有 ${otherCount} 部来源返回的其他结果（排在后面）` : ''}</div>
+          <div className="search-count">找到 {matchedCount} 部标题匹配短剧{contentCount ? `，另有 ${contentCount} 部剧情提到该词（排在后面）` : ''}{fuzzyCount ? `，另有 ${fuzzyCount} 部补搜结果` : ''}{otherCount ? `，另有 ${otherCount} 部来源返回的其他结果（排在后面）` : ''}</div>
           <div className="search-grid">
             {results.map((item) => (
               <button
@@ -380,7 +401,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
                         <RefreshCw size={13} className="spin" /> 正在拉取分集…
                       </>
                     ) : (
-                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.fuzzy ? '补搜结果 · 查看剧集' : item.relevance === 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
+                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.fuzzy ? '补搜结果 · 查看剧集' : item.relevance === 2 ? '剧情相关 · 查看剧集' : item.relevance > 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
                     )}
                   </div>
                 </div>

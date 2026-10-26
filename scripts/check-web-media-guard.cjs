@@ -77,6 +77,31 @@ function loopbackAfterGuard(options) {
   return options;
 }
 const checks = [
+  ['catalog trusted DNS is opt-in, origin-bound and isolated from ordinary sockets', async () => {
+    const guard = guardWithDns([{ address: '9.9.9.9', family: 4 }]);
+    const lookup = options => new Promise((resolve, reject) => options.lookup('hongguoduanju.com', { all: true },
+      (error, addresses) => error ? reject(error) : resolve(addresses)));
+    const normal = guard.webMediaRequestOptions('https://hongguoduanju.com/rank/hot-drama');
+    const trusted = guard.webMediaRequestOptions('https://hongguoduanju.com/rank/hot-drama', { trustedOfficialDns: true });
+    assert.equal((await lookup(normal))[0].address, '9.9.9.9');
+    assert.equal((await lookup(trusted))[0].address, '8.8.8.8', 'trusted route must bypass even a public system-DNS answer');
+    assert.notEqual(trusted.httpsAgent, normal.httpsAgent, 'a warm ordinary socket must not defeat the independent DNS route');
+    assert.equal(normal.proxy, undefined, 'existing media requests retain configured proxy behavior');
+    assert.equal(trusted.proxy, false, 'explicit trusted catalog route must remain direct');
+    for (const url of ['http://hongguoduanju.com/a', 'https://hongguoduanju.com:444/a', 'https://other.example/a']) {
+      assert.throws(() => guard.webMediaRequestOptions(url, { trustedOfficialDns: true }), /公网/);
+    }
+  }],
+  ['catalog trusted DNS still rejects private redirect destinations and their DNS answers', async () => {
+    const guard = guardWithDns([{ address: '127.0.0.1', family: 4 }]);
+    const options = guard.webMediaRequestOptions('https://hongguoduanju.com/rank/hot-drama', { trustedOfficialDns: true });
+    assert.throws(() => options.beforeRedirect({}, { headers: { location: 'http://127.0.0.1/private' } },
+      { url: 'https://hongguoduanju.com/rank/hot-drama' }), /公网/);
+    options.beforeRedirect({}, { headers: { location: 'https://other.example/rank' } },
+      { url: 'https://hongguoduanju.com/rank/hot-drama' });
+    await assert.rejects(new Promise((resolve, reject) => options.lookup('other.example', { all: true },
+      (error, addresses) => error ? reject(error) : resolve(addresses))), /公网/);
+  }],
   ['guarded Range requests reuse validated sockets without global agents', async () => {
     const axios = req('axios'), guard = guardWithDns([{ address: '8.8.8.8', family: 4 }]);
     const connections = new Set();

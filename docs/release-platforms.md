@@ -1,5 +1,7 @@
 # 三端同步发布规则
 
+本轮源码／发行目标为 **3.5**（内部 `3.5.0`，拟用标签 `v3.5`），当前正式版仍为 3.4。Mac arm64、Mac x64、Windows x64 共用本轮版本；构建、签名、公证、安装和运行验收分别记录，不从上一版结果推定本版通过。见 [3.5 说明](release-3.5.md)。
+
 从1.1.9开始，每次项目更新统一评估并构建三端：macOS Apple Silicon arm64、macOS Intel x64、Windows x64。使用同一发行版本，分别记录构建、签名、公证、安装和运行验收。
 
 3.4（内部 `3.4.0`）已于 2026-10-26 正式发布，标签 `v3.4`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac 应用及 DMG 已完成 Developer ID 签名、Apple 公证和装订，Windows EXE 未签名。冻结源码 `241ada2d604ce65dc15d3c4df3686716ece61865`；后续文档提交不改变标签和已发布包。 Windows [本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40207906101) 的便携播放、新装、重装、1.80 升级与资料保留通过；Mac 冻结源码的随机两集下载、播放、定位、全屏及切集已检查，最终签名包完成 arm64 原生和 x64 Rosetta 隔离启动/退出。未覆盖实体 Intel/Windows、干净 Gatekeeper、长期播放、完整应用内跨版本更新；音轨解码不等于人工听感确认。 详见 [3.4 说明](release-3.4.md)。
