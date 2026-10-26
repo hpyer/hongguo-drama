@@ -23,7 +23,7 @@
 
 ## 下载与安装
 
-**当前发行目标：3.8**（内部 `3.8.0`，构建/签名/公证进行中）。三端 16 项发行资产待发布后核对；双 Mac 应用及 DMG 将在发布前完成签名、公证与装订，Windows EXE 未签名。上一正式版为 [3.7](https://github.com/jackotom/hongguo-drama/releases/tag/v3.7)。本版重点解决官网搜不到当天新剧的问题：官网没有同名结果时从 App 上新目录补搜。详见 [3.8 说明](docs/release-3.8.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前正式版：3.8**（内部 `3.8.0`）。三端 16 项发行资产已公开并核对远端摘要；双 Mac 应用及 DMG 已签名、公证与装订，Windows EXE 未签名。上一正式版为 [3.7](https://github.com/jackotom/hongguo-drama/releases/tag/v3.7)。本版重点解决官网搜不到当天新剧的问题：官网没有同名结果时从 App 上新目录补搜。详见 [3.8 说明](docs/release-3.8.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
 | 设备 | 下载 3.8 | 安装方式 |
 |---|---|---|
@@ -464,7 +464,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前发行目标为 **3.8**（内部 `3.8.0`），搜索当天新剧的补搜改动及验收边界见 [3.8 说明](docs/release-3.8.md)。构建、签名、公证与 Windows CI 结果将在正式发布后回填；未用真实大批量观看记录做长期运行，未覆盖实体 Intel Mac、实体 Windows 和干净 Gatekeeper；音轨解码不等于人工听感确认。
+当前正式版为 **3.8**（内部 `3.8.0`），搜索当天新剧的补搜改动及验收边界见 [3.8 说明](docs/release-3.8.md)。冻结源码 `528c716a085dc4e3323ebd0aec7fb96815bc6523`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40311819587) 通过：便携播放、安装启动、同版本重装和真实 1.80 → 3.8 升级资料保留。未用真实大批量观看记录做长期运行，未覆盖实体 Intel Mac、实体 Windows 和干净 Gatekeeper；音轨解码不等于人工听感确认。
 
 上一正式版 **3.7**（内部 `3.7.0`），观看记录检测改进及验收边界见 [3.7 说明](docs/release-3.7.md)。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088) 通过：便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留。
 

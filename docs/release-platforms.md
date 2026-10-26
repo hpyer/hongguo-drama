@@ -1,10 +1,10 @@
 # 三端同步发布规则
 
-当前发行目标为 **3.8**（内部 `3.8.0`，标签 `v3.8`）。Mac arm64、Mac x64、Windows x64 共用本轮正式版本；构建、签名、公证、安装和运行验收分别记录，不从上一版结果推定本版通过。本轮重点是搜索当天新剧的 App 上新补搜；见 [3.8 说明](release-3.8.md)。
+当前正式版为 **3.8**（内部 `3.8.0`，标签 `v3.8`）。Mac arm64、Mac x64、Windows x64 共用本轮正式版本；构建、签名、公证、安装和运行验收分别记录，不从上一版结果推定本版通过。本轮重点是搜索当天新剧的 App 上新补搜；见 [3.8 说明](release-3.8.md)。
 
 从1.1.9开始，每次项目更新统一评估并构建三端：macOS Apple Silicon arm64、macOS Intel x64、Windows x64。使用同一发行版本，分别记录构建、签名、公证、安装和运行验收。
 
-3.8（内部 `3.8.0`）为源码发行目标，标签 `v3.8` 指向本轮冻结提交。搜索在官网没有同名结果、接口 502 或短剧名被老剧名遮蔽时，从 App 近 7 天上新目录补搜；补搜失败不影响官网结果。三端构建、签名、公证和资产核对结果见 [3.8 说明](release-3.8.md)。
+3.8（内部 `3.8.0`）已于 2026-10-26 正式发布，标签 `v3.8`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac App 与 DMG 完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `528c716a085dc4e3323ebd0aec7fb96815bc6523`；[Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40311819587) 的便携播放、安装启动、同版本重装和真实 1.80 → 3.8 升级资料保留通过。搜索在官网没有同名结果、接口 502 或短剧名被老剧名遮蔽时，从 App 近 7 天上新目录补搜。详见 [3.8 说明](release-3.8.md)。
 
 上一正式版为 **3.7**（内部 `3.7.0`），已于 2026-10-26 正式发布，标签 `v3.7`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac App 与 DMG 完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`；[Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088) 的便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留通过。未覆盖实体 Intel Mac、实体 Windows、干净 Gatekeeper、长期大批量观看记录与完整应用内更新。详见 [3.7 说明](release-3.7.md)。
 
