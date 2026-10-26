@@ -1,6 +1,6 @@
 # 红果短剧 3.7
 
-**状态：源码开发版，尚未发布。** 内部版本 `3.7.0`。未签名、未公证、未上传发行资产；当前公开正式版仍为 `3.6`。
+**状态：正式发布。** 内部版本 `3.7.0`，标签 `v3.7`，于 2026-10-26 发布。三端 16 项附件的远端 SHA256 与大小已核对；双 Mac App 与 DMG 完成 Developer ID 签名、Apple 公证 Accepted 和票据装订；Windows EXE 未签名。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`。
 
 ## 观看记录检测
 
@@ -23,6 +23,8 @@
 
 - `npm run build:react`：Vite 生产构建通过，91 个模块完成转换。
 - `npm test`：全部单元测试与 87 项平台检查通过；包含本轮新增的观看记录检查。
+- Mac：两架构 App/DMG 公证 Accepted、装订、只读挂载、版本、签名和更新清单核对通过。
+- Windows CI [40288846088](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088)：便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留通过。
 - `node scripts/check-watch-history.cjs`：8/8，通过单条检测、批量范围转发和续作播放。
 - `node scripts/check-watch-history-3.7.cjs`：4/4，通过剧族只搜一次、每季独立拉取、仅最高季、自动低季间隔、单条检测和错误拆分。
 - `node scripts/check-watch-history-backend.cjs`：6/6，通过三来源续作搜索、部分失败保留和本地候选。
@@ -31,6 +33,8 @@
 
 ## 边界
 
-- 尚未用真实大批量观看记录长时间运行，也未验证 Windows、实体 Intel Mac、Gatekeeper 干净系统和完整应用内更新。
+- 尚未用真实大批量观看记录长时间运行，也未验证实体 Intel Mac、实体 Windows、Gatekeeper 干净系统和完整应用内更新。
 - 同名不同剧仍可能被当作同一剧族；界面沿用“疑似续作”语义，不自动合并记录或删除低季。
-- 当前只完成源码和定向验证，没有签名、公证、安装包或 GitHub 发行。
+- Windows EXE 的 Authenticode 状态为 **NotSigned**；Windows CI 虚拟机验证不代表实体 Windows、GPU/HEVC 和长期稳定性。
+
+发行资产：[v3.7](https://github.com/jackotom/hongguo-drama/releases/tag/v3.7)。

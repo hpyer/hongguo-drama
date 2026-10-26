@@ -1,10 +1,12 @@
 # 三端同步发布规则
 
-当前正式版为 **3.6**（内部 `3.6.0`，标签 `v3.6`）。源码开发目标为 **3.7**（内部 `3.7.0`，尚未发布、未签名、未公证），见 [3.7 说明](release-3.7.md)。Mac arm64、Mac x64、Windows x64 共用本轮正式版本；构建、签名、公证、安装和运行验收分别记录，不从上一版结果推定本版通过。见 [3.6 说明](release-3.6.md)。
+当前正式版为 **3.7**（内部 `3.7.0`，标签 `v3.7`）。Mac arm64、Mac x64、Windows x64 共用本轮正式版本；构建、签名、公证、安装和运行验收分别记录，不从上一版结果推定本版通过。见 [3.7 说明](release-3.7.md)。
 
 从1.1.9开始，每次项目更新统一评估并构建三端：macOS Apple Silicon arm64、macOS Intel x64、Windows x64。使用同一发行版本，分别记录构建、签名、公证、安装和运行验收。
 
-3.6（内部 `3.6.0`）已于 2026-10-26 正式发布，标签 `v3.6`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac 应用及 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `887862f449b87c56a01b565c849057756266d5a5`；后续文档提交不改变标签和已发布包。源码 CI 40280104020 与 [Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40280746595) 绑定同一冻结提交；Windows 便携播放、新装、重装、1.80 升级与资料保留通过；最终签名 arm64 包下载两集 HEVC/AAC 并本地播放 15.7 秒，x64 Rosetta 包隔离启动/退出通过。未覆盖实体 Intel/Windows、干净 Gatekeeper、长期播放、完整应用内跨版本更新；音轨解码不等于人工听感确认。详见 [3.6 说明](release-3.6.md)。
+3.7（内部 `3.7.0`）已于 2026-10-26 正式发布，标签 `v3.7`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac App 与 DMG 完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`；[Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088) 的便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留通过。未覆盖实体 Intel Mac、实体 Windows、干净 Gatekeeper、长期大批量观看记录与完整应用内更新。详见 [3.7 说明](release-3.7.md)。
+
+上一正式版为 **3.6**（内部 `3.6.0`），标签 `v3.6`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac 应用及 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `887862f449b87c56a01b565c849057756266d5a5`；后续文档提交不改变标签和已发布包。源码 CI 40280104020 与 [Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40280746595) 绑定同一冻结提交；Windows 便携播放、新装、重装、1.80 升级与资料保留通过；最终签名 arm64 包下载两集 HEVC/AAC 并本地播放 15.7 秒，x64 Rosetta 包隔离启动/退出通过。未覆盖实体 Intel/Windows、干净 Gatekeeper、长期播放、完整应用内跨版本更新；音轨解码不等于人工听感确认。详见 [3.6 说明](release-3.6.md)。
 
 上一正式版为 **3.5**（内部 `3.5.0`），标签 `v3.5`。三端 16 项附件的 GitHub SHA256 与大小已核对；双 Mac 应用及 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订，Windows EXE 未签名。冻结源码 `34bdc9eabdd81ce42c6ed6a23516b245fe44d93e`；后续文档提交不改变标签和已发布包。源码 CI 40266052588 与 [Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40266211450) 绑定同一冻结提交；Windows 便携播放、新装、重装、1.80 升级与资料保留通过；最终签名 arm64 包实际播放本地与在线分集，arm64 原生和 x64 Rosetta 包均完成隔离启动/退出。详见 [3.5 说明](release-3.5.md)。
 
