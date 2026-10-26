@@ -11,7 +11,8 @@ const source = path.resolve(__dirname, '../main.js'), req = createRequire(source
 const unexpectedSearch = async () => { throw new Error('Unexpected search provider call'); };
 
 function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = unexpectedSearch,
-  hemaSearch = unexpectedSearch, xifanSearch = unexpectedSearch, customSearch = unexpectedSearch } = {}) {
+  newReleaseSearch = async () => [], hemaSearch = unexpectedSearch, xifanSearch = unexpectedSearch,
+  customSearch = unexpectedSearch } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-app-search-'));
   const handlers = {}, app = new EventEmitter();
   Object.assign(app, {
@@ -24,6 +25,7 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
     './src/store': { getSettings: () => ({ search_app_enabled: appEnabled }) },
     './src/native/hongguo-search': { searchHongguo: webSearch },
     './src/native/hongguo-app-search': { searchApp: appSearch },
+    './src/native/hongguo-app-new': { searchNewReleases: newReleaseSearch },
     './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
     './src/native/hema': { search: hemaSearch },
     './src/native/xifan': { search: xifanSearch },
@@ -73,7 +75,104 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
   const disabled = await h3.handlers['search-series']({}, '测试剧', { source: 'hongguo' });
   assert.equal(disabled.channel, 'web');
   h3.cleanup();
-  console.log('PASS app search IPC: opt-in App first, website fallback, pinned cursor pagination');
+
+  {
+    const calls = [];
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6000001', series_title: '无关结果' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async (keyword, options) => {
+        calls.push({ keyword, options });
+        return [{ series_id: '6000002', series_title: '当天新剧', new_release: true, released_today: true, source: 'hongguo' }];
+      },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '当天新剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.channel, 'web');
+      assert.equal(result.meta.newRelease, 1);
+      assert.equal(result.meta.newReleaseChecked, true);
+      assert.ok(result.results.some(item => item.series_id === '6000002' && item.new_release && item.released_today));
+      assert.equal(calls.length, 1, 'website miss must consult the App new-release list once');
+      assert.equal(calls[0].keyword, '当天新剧');
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6050001', series_title: '接班人的考题' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async () => [{ series_id: '6050002', series_title: '接班', new_release: true, released_today: true, source: 'hongguo' }],
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '接班', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.meta.newRelease, 1, 'a longer old title must not hide the exact new short title');
+      assert.ok(result.results.some(item => item.series_id === '6050002'));
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6100001', series_title: '当天新剧' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async () => { throw new Error('must not run when the title already matches'); },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '当天新剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.meta.newRelease, 0);
+      assert.equal(result.meta.newReleaseChecked, false);
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => { throw new Error('搜索服务暂不可用（HTTP 502）'); },
+      newReleaseSearch: async () => [{ series_id: '6200001', series_title: '刚上线的新剧', new_release: true, source: 'hongguo' }],
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '刚上线的新剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.via, 'app-new');
+      assert.equal(result.partial, true);
+      assert.equal(result.meta.newRelease, 1);
+      assert.match(result.error, /HTTP 502/);
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6300001', series_title: '官网结果' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async () => { throw new Error('App 上新不可用'); },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '另一个剧名', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.results[0].series_id, '6300001');
+      assert.equal(result.meta.newReleaseChecked, true);
+      assert.match(result.meta.newReleaseError, /App 上新不可用/);
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    let calls = 0;
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [], total: 0, page: 1, totalPages: 0, hasMore: false }),
+      newReleaseSearch: async () => { calls++; return []; },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(calls, 0, 'single-character queries must not fetch App new releases');
+      assert.equal(result.meta.newReleaseChecked, false);
+    } finally { fixture.cleanup(); }
+  }
+
+  console.log('PASS app search IPC: opt-in App first, website fallback, pinned cursor pagination, new-release supplement');
 
   let failures = 0;
   async function check(name, run) {

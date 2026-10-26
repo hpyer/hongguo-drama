@@ -1434,6 +1434,44 @@ let appSearchCooldownUntil = 0;
 const APP_SEARCH_COOLDOWN_MS = 2 * 60 * 1000;
 let proxyStartupFallback = false;
 
+/**
+ * 官网搜索没有标题匹配时，用 App「近 7 天上新」列表补搜。
+ * 只用于第一页，且失败不影响官网结果；成功结果带 new_release 标记。
+ */
+async function searchNewReleasesForSearch(keyword, options = {}) {
+  const { deadline } = options || {};
+  // 单字/纯标点搜索无法在上新列表里做有效标题匹配，也不值得为它多打两次 App 接口。
+  const normalized = String(keyword || '').normalize('NFKC').replace(/[\s\p{P}\p{S}]+/gu, '');
+  if (normalized.length < 2) return { results: [], checked: false, error: '' };
+  const budget = Number(deadline) || 0;
+  if (!budget || budget - Date.now() < 900) return { results: [], checked: false, error: '' };
+  try {
+    const results = await require('./src/native/hongguo-app-new').searchNewReleases(keyword, {
+      deadline: Math.min(budget, Date.now() + 4000),
+    });
+    return { results: Array.isArray(results) ? results : [], checked: true, error: '' };
+  } catch (error) {
+    console.warn('[Search] App 上新补搜失败:', error?.message || error);
+    return { results: [], checked: true, error: error?.message || 'App 上新补搜失败' };
+  }
+}
+
+function mergeNewReleases(results, extras) {
+  const map = new Map((results || []).map(item => [String(item.series_id), item]));
+  for (const extra of extras) {
+    if (!extra?.series_id) continue;
+    const id = String(extra.series_id);
+    const existing = map.get(id);
+    if (existing) {
+      map.set(id, { ...extra, ...existing, new_release: true,
+        ...(extra.released_today ? { released_today: true } : {}) });
+    } else {
+      map.set(id, extra);
+    }
+  }
+  return [...map.values()];
+}
+
 async function searchAtSource(keyword, options = {}) {
   const page = options.page === undefined ? 1 : options.page;
   if (!Number.isSafeInteger(page) || page < 1 || page > 50) throw new Error('搜索页码必须是 1 至 50 的整数');
@@ -1457,6 +1495,7 @@ async function searchAtSourcePage(keyword, options = {}) {
   const page = options.page;
   const searchQuery = normalizeSearchTitle(keyword);
   const hasTitleMatch = items => !!searchQuery && items.some(item => normalizeSearchTitle(item.series_title).includes(searchQuery));
+  const hasExactTitleMatch = items => !!searchQuery && items.some(item => normalizeSearchTitle(item.series_title) === searchQuery);
   // 第 2 页起必须固定第一页选中的通道，不能中途换源造成重复/漏结果。
   if (page > 1) {
     if (options?.channel === 'app') {
@@ -1521,6 +1560,15 @@ async function searchAtSourcePage(keyword, options = {}) {
         }
       }
     }
+    // 官网没有标题匹配（常见于当天刚上线、搜索索引未同步），用 App 上新列表补搜。
+    // 短剧名还要排除“老剧名包含新剧名”的遮蔽，例如搜「接班」只返回《接班人的考题》。
+    const needsNewRelease = searchQuery.length >= 2
+      && (!hasTitleMatch(results) || (searchQuery.length <= 4 && !hasExactTitleMatch(results)));
+    let newRelease = { results: [], checked: false, error: '' };
+    if (options?.fuzzy !== false && needsNewRelease) {
+      newRelease = await searchNewReleasesForSearch(keyword, { deadline });
+      if (newRelease.results.length) results = mergeNewReleases(results, newRelease.results);
+    }
     const relaxedQuery = attempted.join('、');
     const meta = {
       total: response.total,
@@ -1529,6 +1577,9 @@ async function searchAtSourcePage(keyword, options = {}) {
       hasMore: response.hasMore,
       relaxed: attempted.length > 0,
       relaxedQuery,
+      newRelease: newRelease.results.length,
+      newReleaseChecked: newRelease.checked,
+      ...(newRelease.error ? { newReleaseError: newRelease.error } : {}),
     };
     const webMeta = { ...meta, channel: 'web', cursor: { page: response.page, nextPage: response.nextPage || null }, hasMore: !!response.hasMore };
     if (fuzzyErrors.length && !results.length) {
@@ -1540,7 +1591,20 @@ async function searchAtSourcePage(keyword, options = {}) {
     }
     return { success: true, results, pageTitle: '', via: 'api', channel: 'web', meta: webMeta, hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
   } catch (error) {
-    console.warn('[Search] 红果接口失败:', error.message);
+    const message = error?.message || String(error || '搜索失败');
+    console.warn('[Search] 红果接口失败:', message);
+    // 接口 5xx/结构变化时 App 上新列表仍可能可用，能补到当天新剧就不必只报错或空等页面嗅探。
+    if (page === 1 && options?.fuzzy !== false && searchQuery.length >= 2) {
+      const newRelease = await searchNewReleasesForSearch(keyword, { deadline });
+      if (newRelease.results.length) {
+        return { success: true, results: newRelease.results, pageTitle: '', via: 'app-new', channel: 'app-new', page: 1,
+          total: newRelease.results.length, totalPages: 0, hasMore: false, nextPage: null, cursor: null, partial: true,
+          error: `官网搜索未完成：${message}；已显示 App 上新补搜结果`,
+          meta: { total: newRelease.results.length, page: 1, totalPages: 0, hasMore: false, relaxed: false,
+            newRelease: newRelease.results.length, newReleaseChecked: true },
+          apiError: message, appError: appFallbackError };
+      }
+    }
     if (error.fallback !== true) throw error;
     if (deadline && Date.now() >= deadline) {
       return { success: false, results: [], via: 'dom', partial: true, error: '搜索超时，页面兜底未开始', apiError: error.message };

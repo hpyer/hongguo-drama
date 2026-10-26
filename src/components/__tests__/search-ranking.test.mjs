@@ -61,3 +61,14 @@ test('content matches rank after title matches but before unrelated results', ()
   assert.deepEqual(ranked.map(item => item.relevance), [1, 2, 3]);
   assert.equal(ranked[1].contentMatch, true);
 });
+
+test('App new-release reverse matches rank as title matches', () => {
+  const ranked = rankSearchResults([
+    { source: 'hongguo', series_id: '1', series_title: '完全无关的剧' },
+    { source: 'hongguo', series_id: '2', series_title: '闪婚', new_release: true },
+    { source: 'hongguo', series_id: '3', series_title: '别的剧', series_intro: '我想看闪婚' },
+  ], '我想看闪婚');
+  assert.deepEqual(ranked.map(item => item.series_id), ['2', '3', '1']);
+  assert.equal(ranked[0].relevance, 1);
+  assert.equal(ranked[1].relevance, 2);
+});

@@ -161,4 +161,4 @@ async function browseList(options = {}) {
   return promise;
 }
 
-module.exports = { browseList };
+module.exports = { browseList, catalogCover };

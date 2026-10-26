@@ -24,6 +24,7 @@ function load(searchHongguo) {
     electron,
     './src/store': { getSettings: () => ({}) },
     './src/native/hongguo-search': { searchHongguo },
+    './src/native/hongguo-app-new': { searchNewReleases: async () => [] },
     './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
   };
   const context = vm.createContext({

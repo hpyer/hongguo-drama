@@ -151,6 +151,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
           merged.push(...(entry.value.results || []).map(item => ({ ...item, source: searchSource })));
           if (entry.value.partial) warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：${entry.value.error || '补充搜索未完成，可稍后重试。'}`);
           if (entry.value.meta?.relaxed) warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：没有完整剧名匹配，已用「${entry.value.meta.relaxedQuery}」补搜。`);
+          if (entry.value.meta?.newRelease && entry.value.via !== 'app-new') warnings.push(`${mediaSourceLabel(searchSource, mediaSources)}：官网暂未返回同名结果，已从 App 上新补搜到 ${entry.value.meta.newRelease} 部。`);
           if (sources.length === 1) setPageTitle(entry.value.pageTitle || '');
           if (entry.value.channel && entry.value.channel !== 'dom' && entry.value.hasMore) {
             nextMore[searchSource] = { channel: entry.value.channel, cursor: entry.value.cursor || null, page: entry.value.page || 1, hasMore: true };
@@ -401,7 +402,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
                         <RefreshCw size={13} className="spin" /> 正在拉取分集…
                       </>
                     ) : (
-                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.fuzzy ? '补搜结果 · 查看剧集' : item.relevance === 2 ? '剧情相关 · 查看剧集' : item.relevance > 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
+                      <><span className="badge">{mediaSourceLabel(item.source, mediaSources)}</span>{item.new_release && <span className="badge-new">{item.released_today ? '今日上新' : 'App 新剧'}</span>}{item.fuzzy ? '补搜结果 · 查看剧集' : item.relevance === 2 ? '剧情相关 · 查看剧集' : item.relevance > 2 ? '其他结果 · 查看剧集' : '查看剧集'}</>
                     )}
                   </div>
                 </div>

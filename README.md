@@ -23,18 +23,18 @@
 
 ## 下载与安装
 
-**当前正式版：3.7**（内部 `3.7.0`）。三端 16 项发行资产已公开并核对远端摘要；双 Mac 应用及 DMG 已签名、公证与装订，Windows EXE 未签名。上一正式版为 [3.6](https://github.com/jackotom/hongguo-drama/releases/tag/v3.6)。本版重点改进观看记录的更新检测，详见 [3.7 说明](docs/release-3.7.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前发行目标：3.8**（内部 `3.8.0`，构建/签名/公证进行中）。三端 16 项发行资产待发布后核对；双 Mac 应用及 DMG 将在发布前完成签名、公证与装订，Windows EXE 未签名。上一正式版为 [3.7](https://github.com/jackotom/hongguo-drama/releases/tag/v3.7)。本版重点解决官网搜不到当天新剧的问题：官网没有同名结果时从 App 上新目录补搜。详见 [3.8 说明](docs/release-3.8.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
-| 设备 | 下载 3.7 | 安装方式 |
+| 设备 | 下载 3.8 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/Hongguo-3.7-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/Hongguo-3.7-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/hongguo-downloader-3.7-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/hongguo-downloader-3.7-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/hongguo-downloader-3.7-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/Hongguo-3.8-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/Hongguo-3.8-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/hongguo-downloader-3.8-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/hongguo-downloader-3.8-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/hongguo-downloader-3.8-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.7 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.7) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.7/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.8 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.8) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.8/SHA256SUMS.txt)
 
-- **升级到 3.7**：1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
+- **升级到 3.8**：1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
@@ -48,6 +48,14 @@
 2. 在「发现短剧」浏览，或在「搜索与下载」输入剧名、红果分享链接或剧集 ID。
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
+
+## 3.8 搜索当天新剧
+
+- 官网搜索没有同名结果、接口 502，或短剧名被更长的老剧名遮蔽时，自动从 App 近 7 天上新目录补搜当天新剧。
+- 补搜结果显示「今日上新」/「App 新剧」标记；官网已有精确同名结果时不额外请求 App。
+- 补搜失败不影响官网结果；加载更多仍固定官网通道，不会把补搜结果混进下一页。
+- App 搜索实验开关仍默认关闭；本次补搜读取 App 分类目录，不需要开启该开关。
+- 边界：每类最多取前 50 条、缓存 60 秒；App 目录接口偶发失败时仍以官网结果为准。
 
 ## 3.7 观看记录检测
 
@@ -456,7 +464,9 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前正式版为 **3.7**（内部 `3.7.0`），观看记录检测改进及验收边界见 [3.7 说明](docs/release-3.7.md)。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088) 通过：便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留。未用真实大批量观看记录做长期运行，未覆盖实体 Intel Mac、实体 Windows 和干净 Gatekeeper；音轨解码不等于人工听感确认。
+当前发行目标为 **3.8**（内部 `3.8.0`），搜索当天新剧的补搜改动及验收边界见 [3.8 说明](docs/release-3.8.md)。构建、签名、公证与 Windows CI 结果将在正式发布后回填；未用真实大批量观看记录做长期运行，未覆盖实体 Intel Mac、实体 Windows 和干净 Gatekeeper；音轨解码不等于人工听感确认。
+
+上一正式版 **3.7**（内部 `3.7.0`），观看记录检测改进及验收边界见 [3.7 说明](docs/release-3.7.md)。冻结源码 `85920561b68e0d5cc6ef10f5e6c2c33e96659f09`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40288846088) 通过：便携播放、安装启动、同版本重装和真实 1.80 → 3.7 升级资料保留。
 
 上一正式版 **3.6**（内部 `3.6.0`），分集提速、目录双线与分页修复及发行边界见 [3.6 说明](docs/release-3.6.md)。冻结源码 `887862f449b87c56a01b565c849057756266d5a5`；其 16 项附件、签名、公证和 Windows CI 结果保持不变。
 
