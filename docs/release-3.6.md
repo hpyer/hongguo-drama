@@ -1,6 +1,6 @@
 # 红果短剧 3.6
 
-**状态：源码／发行目标。** 内部版本 `3.6.0`，拟用标签 `v3.6`。当前已公开正式版仍为 [3.5](release-3.5.md)；本文件不表示 3.6 的三端包已构建、签名、公证或发布。
+**状态：正式发布。** 内部版本 `3.6.0`，标签 `v3.6`，于 2026-10-26 发布。三端 16 项附件的远端 SHA256 与大小已核对；双 Mac 应用及 DMG 已签名、Apple 公证 Accepted 并装订，Windows EXE 未签名。冻结源码 [`887862f`](https://github.com/jackotom/hongguo-drama/commit/887862f449b87c56a01b565c849057756266d5a5)；后续文档提交不改变标签和已发布包。
 
 ## 分集拉取提速
 
@@ -36,9 +36,10 @@
 
 - 本地全量 `npm test` 通过：单元测试及 86 项平台检查。分集回归 `check-source-recovery` 15/15、`check-native-performance` 8/8，身份检查通过。
 - App 与官网仍可能间歇超时；分集并行重试覆盖大部分坏边缘，但不保证每次必然秒开。
-- 正式 Mac 签名、公证、Windows CI 和 GitHub 发行尚待完成；上一版 3.5 的结果不能代替本版。
+- 双 Mac App 与 DMG 均取得 Developer ID 签名、Apple 公证 Accepted 和票据装订；两种 DMG 均完成只读挂载与签名、版本、架构核对。Windows 7 项资产来自 [CI 40280746595](https://github.com/jackotom/hongguo-drama/actions/runs/40280746595)，便携播放、新装、重装和真实 1.80 → 3.6 升级资料保留通过；EXE 的 Authenticode 状态为 **NotSigned**。源码 CI [40280104020](https://github.com/jackotom/hongguo-drama/actions/runs/40280104020) 与发行资产绑定同一冻结提交。
+- 最终签名 arm64 包实际下载两集 HEVC/AAC 视频，前 10 秒解码无错误，本地第 1 集播放至 15.7 秒有画面；x64 Rosetta 包隔离启动并正常退出。
 - 未覆盖实体 Intel／Windows、启用 Gatekeeper 的干净系统、长期播放、完整应用内跨版本更新和人工听音；西饭上游影片身份未确认。
 
 本项目不是来源平台的官方客户端，不提供付费分集解锁。按 GPL-3.0 提供源码，第三方许可与对应源码随发行附带。
 
-源码目标提交将在冻结后记录。
+发行资产：[v3.6](https://github.com/jackotom/hongguo-drama/releases/tag/v3.6)。

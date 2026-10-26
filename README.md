@@ -23,20 +23,18 @@
 
 ## 下载与安装
 
-**当前正式版：3.5**。三端发行资产已公开并核对远端摘要，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.4](https://github.com/jackotom/hongguo-drama/releases/tag/v3.4)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
+**当前正式版：3.6**。三端发行资产已公开并核对远端摘要，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.5](https://github.com/jackotom/hongguo-drama/releases/tag/v3.5)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
-**当前源码／发行目标：3.6**（内部 `3.6.0`）。分集拉取提速、双目录收尾与分页修复已完成本地验证；3.6 的正式构建、签名、公证和发布待完成，下方仍链接已发布的 3.5。详见 [3.6 说明](docs/release-3.6.md)。
-
-| 设备 | 下载 3.5 | 安装方式 |
+| 设备 | 下载 3.6 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/Hongguo-3.5-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/Hongguo-3.5-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/hongguo-downloader-3.5-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/hongguo-downloader-3.5-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/hongguo-downloader-3.5-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/Hongguo-3.6-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/Hongguo-3.6-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/hongguo-downloader-3.6-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/hongguo-downloader-3.6-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/hongguo-downloader-3.6-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.5 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.5) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.6 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.6) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.6/SHA256SUMS.txt)
 
-- **升级到 3.5**：1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
+- **升级到 3.6**：1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
@@ -450,11 +448,11 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-当前源码目标为 **3.6**（内部 `3.6.0`），分集提速、目录双线和分页修复的本地证据见 [3.6 说明](docs/release-3.6.md)；正式发行前仍以 3.5 的已发布资产为准。
+当前正式版为 **3.6**（内部 `3.6.0`），分集提速、目录双线与分页修复及验收边界见 [3.6 说明](docs/release-3.6.md)。冻结源码 `887862f449b87c56a01b565c849057756266d5a5`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40280746595) 通过；最终签名 arm64 包下载两集 HEVC/AAC 视频并本地播放 15.7 秒，x64 Rosetta 包隔离启动正常。音轨解码通过，未将其等同于人工听感确认。
 
-当前正式版为 **3.5**（内部 `3.5.0`），目录双线、分页恢复与发行边界见 [3.5 说明](docs/release-3.5.md)。冻结源码 `34bdc9eabdd81ce42c6ed6a23516b245fe44d93e`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40266211450) 通过；Mac 冻结源码的随机两集下载、播放、定位、全屏与切集已验，最终签名包完成 arm64 原生与 x64 Rosetta 隔离启动/退出。音轨解码通过，未将其等同于人工听感确认。
+上一正式版 **3.5**（内部 `3.5.0`），目录双线、分页恢复与发行边界见 [3.5 说明](docs/release-3.5.md)。冻结源码 `34bdc9eabdd81ce42c6ed6a23516b245fe44d93e`；其 16 项附件、签名、公证和 Windows CI 结果保持不变。
 
-上一正式版 **3.4**（内部 3.4.0），搜索、便携资料与安全修复及验收边界见 [3.4 说明](docs/release-3.4.md)。冻结源码 `241ada2d604ce65dc15d3c4df3686716ece61865`；其 16 项附件、签名、公证和 Windows CI 结果保持不变。App 搜索仍是默认关闭的实验选项。
+更早正式版 **3.4**（内部 3.4.0），搜索、便携资料与安全修复及验收边界见 [3.4 说明](docs/release-3.4.md)。App 搜索仍是默认关闭的实验选项。
 
 更早正式版 **3.3**（内部 3.3.0）的下载降级与 Mac 界面缩放记录见 [3.3 说明](docs/release-3.3.md)。以下保留其历史验收结果，不代替 3.6 验收。
 
