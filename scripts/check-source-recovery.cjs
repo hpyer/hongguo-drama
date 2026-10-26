@@ -11,7 +11,7 @@ const webPage = (vid = '11', sid = '1', extra = {}) => `<script>window._ROUTER_D
 } })}</script><script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', url: `https://hongguoduanju.com/player/${sid}/${vid}`, contentUrl: media('web') })}</script>`;
 function load(file, dependencies) {
   const context = { Buffer, URL, URLSearchParams, AbortSignal, AbortController, process: { env: {} }, module: { exports: {} },
-    console: { warn() {} }, setTimeout: fn => fn(),
+    console: { warn() {} }, setTimeout: (fn, ms) => ms === 600 ? setTimeout(fn, 0) : fn(),
     require: name => Object.hasOwn(dependencies, name) ? dependencies[name] : require(name.startsWith('.') ? path.join(nativeDir, name) : name) };
   vm.runInNewContext(fs.readFileSync(path.join(nativeDir, file), 'utf8'), context);
   return context.module.exports;
@@ -136,7 +136,7 @@ const checks = [
     assert.deepEqual(apiTimeouts, [6000], 'legacy playback lookup must not repeat after timeout');
     webAvailable = true; webTimeouts.length = 0;
     assert.equal((await f.fetchEpisodeListFromWeb('1')).series_id, '1');
-    assert.deepEqual(webTimeouts, [8000, 8000], 'episode page race bounds each web route');
+    assert.deepEqual(webTimeouts, [1500, 1500], 'episode page first race bounds each web route');
   }],
   ['Web rejects wrong or missing current episode identity even when vid_list contains the request', async () => {
     for (const data of [
@@ -149,6 +149,45 @@ const checks = [
       const f = load('hongguo.js', { axios: { get: async () => ({ data: html }) } });
       assert.equal(await f.fetchPlayUrlFromWeb('11', '1'), null, 'unverified webpage must not be labelled as the requested episode');
     }
+  }],
+  ['Episode list retries both web routes, then retries a transient empty detail API', async () => {
+    const webCalls = [], apiCalls = [], sid = '918273645';
+    const f = load('hongguo.js', {
+      axios: {
+        get: async url => {
+          webCalls.push(url);
+          throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+        },
+        post: async () => {
+          apiCalls.push(1);
+          if (apiCalls.length < 3) return { status: 200, headers: {}, data: Buffer.alloc(0) };
+          return { status: 200, headers: {}, data: Buffer.from(JSON.stringify({ code: 0, data: {
+            [sid]: { video_data: { series_title: '重试成功', video_list: [
+              { vid: '101', vid_index: 1 }, { vid: '102', vid_index: 2 },
+            ] } },
+          } })) };
+        },
+      },
+    });
+    const data = await f.fetchEpisodeList(sid);
+    assert.equal(data.total, 2);
+    assert.equal(apiCalls.length, 3, 'empty 200 responses must be retried before giving up');
+    assert.equal(webCalls.filter(url => url.includes(`/player/${sid}`)).length, 3, 'the retry must try the player route with both resolvers');
+    assert.equal(webCalls.filter(url => url.includes(`series_id=${sid}`)).length, 3, 'the retry must try the detail route with both resolvers');
+  }],
+  ['Episode list turns repeated aborts and empty responses into one readable failure', async () => {
+    const f = load('hongguo.js', {
+      axios: {
+        get: async () => { throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); },
+        post: async () => ({ status: 200, headers: {}, data: Buffer.alloc(0) }),
+      },
+    });
+    await assert.rejects(f.fetchEpisodeList('918273646'), error => {
+      assert.match(error.message, /加载超时或连接中断/);
+      assert.match(error.message, /0 字节/);
+      assert.doesNotMatch(error.message, /aborted/);
+      return true;
+    });
   }],
   ['Protected website SEO preview never replaces the complete App episode', async () => {
     const calls = [];

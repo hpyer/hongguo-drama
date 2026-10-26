@@ -130,7 +130,7 @@ async function mount(file, api, props = {}, storage = null) {
     });
     const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: h.browse }); await ui.flush();
     ui.button('下一页').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('加载失败'));
+    assert.ok(ui.text().includes('加载失败'), ui.text().slice(-500));
     assert.ok(ui.text().includes('第 1 页'), 'failed page must not relabel the old cards');
     assert.ok(ui.text().includes('游标0片单'));
     ui.button('下一页').props.onClick(); await ui.flush();
@@ -222,7 +222,7 @@ async function mount(file, api, props = {}, storage = null) {
     if (scenario === 'new-genre') ui.button('悬疑').props.onClick();
     else { h.advance(120001); ui.button('上一页').props.onClick(); }
     await ui.flush();
-    assert.equal(requests.at(-1).page, 1); assert.ok(ui.text().includes('加载失败'));
+    assert.equal(requests.at(-1).page, 1); assert.ok(/加载失败|刷新失败/.test(ui.text()), ui.text().slice(-600));
     assert.ok(ui.text().includes(`第 ${oldPage} 页`));
     assert.equal(ui.button('下一页').props.disabled, true, 'failed first page cannot use the retained cards cursor chain');
     assert.equal(ui.button('上一页').props.disabled, true);
@@ -746,7 +746,7 @@ async function mount(file, api, props = {}, storage = null) {
     assert.equal(calls.at(-1).genre, 'romance');
     ui.unmount();
   });
-  await test('browse App route defaults to dynamic genres and cursor paging without persisted pages', async () => {
+  await test('browse App route defaults to dynamic genres and cursor paging with a first-page preview', async () => {
     const calls = [];
     const ui = await mount('Browse', {
       getSeriesList: async () => [],
@@ -761,7 +761,9 @@ async function mount(file, api, props = {}, storage = null) {
     assert.equal(ui.find(n => n.props['aria-label'] === '红果目录线路').props.value, 'app');
     assert.equal(ui.nodes().filter(n => n.props.className?.startsWith('browse-cat ') && n.children[0]?.startsWith?.('hot-')).length, 4);
     assert.ok(!ui.text().includes('共 800 部'));
-    assert.equal(ui.localStorage.getItem('hongguo.catalog.page.v1'), null, 'App pages and dynamic genre IDs must not be persisted');
+    const persisted = JSON.parse(ui.localStorage.getItem('hongguo.catalog.page.v1') || '[]');
+    assert.ok(persisted.some(entry => entry.key.includes('"app"') && entry.key.includes('real-drama')), 'App first page may be persisted as a stale preview');
+    assert.ok(!persisted.some(entry => entry.key.includes('"app"') && entry.key.includes(',2]')), 'App page 2 must not be persisted');
     ui.button('都市').props.onClick(); await ui.flush();
     assert.equal(calls.at(-1).genre, 'cate_42');
     ui.button('下一页').props.onClick(); await ui.flush();

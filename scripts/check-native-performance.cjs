@@ -38,7 +38,7 @@ function fixture({ web = true, api = false, app = false, blockedVids = [], html 
     module: { exports: {} }, Buffer, AbortController, process: { env: {} },
     require: name => name === 'axios' ? axios : name === './app-source' ? { fetchAppPlayUrl: async () => { state.appCalls++; if (!state.app) throw Error('app unavailable'); return { url: 'https://media.example/app.mp4', contentKey: '01'.repeat(16), source: 'app' }; } } : require(name.startsWith('.') ? path.join(path.dirname(sourcePath), name) : name),
     Date: class extends Date { static now() { return now; } },
-    setTimeout: fn => { state.waits++; fn(); },
+    setTimeout: (fn, ms) => { if (ms === 600) return setTimeout(fn, 0); state.waits++; fn(); },
     console: { warn() {}, log() {} },
   };
   vm.runInNewContext(source, context, { filename: sourcePath });
@@ -95,12 +95,13 @@ const checks = [
     await native.fetchEpisodeList('1');
     assert.equal(state.get, 6, '分集到期后重新竞速两条网页路径');
   }],
-  ['空响应不重试 API，网页详情失败只重试一次', async () => {
+  ['空响应按网关丢包重试，网页失败后重试两条路径', async () => {
     const { native, state } = fixture({ web: false });
     await assert.rejects(native.fetchEpisodeList('1'));
+    assert.equal(state.get, 6, '网页失败后应各用可信/普通 DNS 重新竞速 player 与 detail');
     assert.equal((await native.fetchPlayUrlSingle('11', '1')).url, null);
-    assert.equal(state.post, 2, '每个失败链路只访问一次空响应 API');
-    assert.equal(state.waits, 1, '只有网页详情回退等待一次，API 空响应不进入退避重试');
+    assert.equal(state.post, 4, '分集空响应最多重试三次，播放地址仍只尝试一次');
+    assert.equal(state.waits, 2, '分集空响应退避两次');
     state.web = true;
     assert.equal((await native.fetchEpisodeList('1')).total, 2);
     assert.equal((await native.fetchPlayUrlSingle('11', '1')).source, 'web');

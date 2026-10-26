@@ -80,7 +80,7 @@ function Browse({ onNavigate, active = true }) {
   const loadingRequest = useRef(0);
   const pageCache = useRef(new Map()).current;
   const refreshFirstPage = useRef(false);
-  const viewRef = useRef({ source: '', category: '', channel: '', genre: '' });
+  const viewRef = useRef({ source: '', category: '', channel: '', genre: '', page: 0 });
   const listTimer = useRef(null);
   const toastTimer = useRef(null);
 
@@ -154,24 +154,27 @@ function Browse({ onNavigate, active = true }) {
       const request = listRequest.current;
       const channel = source === 'hongguo' ? catalogChannel : '';
       const key = JSON.stringify([sourceRevision, source, channel, cat, gen, pg]);
-      const persistedKey = JSON.stringify([source, cat, gen, pg]);
-      // The backend owns App page caching so cards cannot outlive their cursor session.
-      let cached = appCatalog ? null : pageCache.get(key);
-      const canPersist = !appCatalog && !source.startsWith('custom:');
-      // App pages depend on a live cursor; editable sources may change catalogs under the same ID.
+      const persistedKey = JSON.stringify([source, channel, cat, gen, pg]);
+      // First-page App cards are safe to show as a stale preview; page 2+ depends on a live cursor.
+      const canPersist = !source.startsWith('custom:') && (!appCatalog || pg === 1);
+      let cached = pageCache.get(key);
       if (!cached && canPersist) {
         cached = readPersistedPage(persistedKey);
         if (cached) pageCache.set(key, cached);
       }
       const sameView = viewRef.current.source === source && viewRef.current.category === cat && viewRef.current.channel === channel;
       const sameQuery = sameView && viewRef.current.genre === gen;
-      viewRef.current = { source, category: cat, channel, genre: gen };
+      const samePage = viewRef.current.page === pg;
+      viewRef.current = { source, category: cat, channel, genre: gen, page: pg };
+      // A stale App first page is a useful cold-start preview, but must not replace the
+      // page the user is already on when refreshing another page or after an expired back.
+      const useCached = cached && (!appCatalog || !sameView || samePage);
       const fallbackUrl = source === 'hongguo' && catalogChannel === 'web'
         ? `https://hongguoduanju.com/${cat.startsWith('hot-') ? 'rank' : 'category'}/${encodeURIComponent(cat)}${gen ? `/${encodeURIComponent(gen)}` : ''}${pg > 1 ? `?page=${pg}` : ''}` : '';
       setUnsupported(false);
       setError('');
       // Keep the current grid during a genre/page refresh instead of replacing it with skeletons.
-      if (cached) {
+      if (useCached) {
         setResults(cached.results);
         setMeta({ ...cached.meta, page: pg });
         setSourceUrl(cached.sourceUrl || fallbackUrl);
@@ -180,7 +183,7 @@ function Browse({ onNavigate, active = true }) {
         setMeta(prev => sameView ? prev : { total: 0, totalPages: 0, genres: [] });
         setSourceUrl(prev => sameView ? prev : fallbackUrl);
       }
-      if (!forceRefresh && cached && Date.now() - cached.savedAt < PAGE_CACHE_TTL_MS) {
+      if (!forceRefresh && cached && !appCatalog && Date.now() - cached.savedAt < PAGE_CACHE_TTL_MS) {
         setLoading(false);
         return;
       }
@@ -221,7 +224,7 @@ function Browse({ onNavigate, active = true }) {
         setMeta(next.meta);
         setSourceUrl(next.sourceUrl);
         if (next.results.length) {
-          if (!appCatalog) {
+          if (!appCatalog || pg === 1) {
             pageCache.delete(key);
             pageCache.set(key, next);
             if (canPersist) writePersistedPage(persistedKey, next);
@@ -466,7 +469,7 @@ function Browse({ onNavigate, active = true }) {
         </div>
         <div className="browse-header-right">
           <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select></label>
-          {source === 'hongguo' && <label className="source-control">目录线路<select className="input-field" aria-label="红果目录线路" value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">App（快速）</option><option value="web">官网</option></select></label>}
+          {source === 'hongguo' && <label className="source-control">目录线路<select className="input-field" aria-label="红果目录线路" value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">App（快速 · 部分片单）</option><option value="web">官网（完整目录）</option></select></label>}
           <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />搜索短剧</button>
           <button className="btn btn-outline" disabled={loading || sourcesLoading} onClick={refreshList}><RefreshCw size={15} />刷新片单</button>
           {meta.total > 0 && <span className="browse-stat">共 {meta.total} 部</span>}
@@ -499,6 +502,7 @@ function Browse({ onNavigate, active = true }) {
       })}
 
       {sourcesError && <p className="browse-source-note" role="status">来源列表更新失败，暂用上次列表。可在设置重新保存来源后重试。</p>}
+      {source === 'hongguo' && catalogChannel === 'app' && <p className="browse-source-note" role="status">App 快速线路只显示部分片单；需要更完整的目录时请切换到“官网”。</p>}
       {source.startsWith('custom:') && <p className="browse-source-note">来自 {mediaSourceLabel(source, mediaSources)} 的接口目录，按来源顺序显示，不代表热播榜。</p>}
       {source === 'xifan' && <p className="browse-source-note">当前提供题材分类，西饭热播榜暂未接入。</p>}
 

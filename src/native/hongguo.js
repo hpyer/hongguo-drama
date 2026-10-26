@@ -124,11 +124,13 @@ async function apiCall(apiPath, body, retries = 3, timeout = 25000) {
         throw err;
       }
     } catch (err) {
-      if (err.emptyResponse || i === retries - 1) {
+      if (i === retries - 1) {
         if (err.detail === undefined) err.detail = signal;
         throw err;
       }
-      await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      // A 200 with no body is usually a gateway dropping the request before business
+      // processing, so it is transient too; retry it sooner than a real timeout.
+      await new Promise(r => setTimeout(r, (err.emptyResponse ? 700 : 2000) * (i + 1)));
     }
   }
 }
@@ -177,8 +179,17 @@ function normalizeVideoUrl(raw) {
 }
 
 /** 拉取官网页面 HTML */
-async function fetchSiteHtml(url, timeout = 30000, signal) {
+async function fetchSiteHtml(url, timeout = 30000, signal, { trustedOfficialDns = false } = {}) {
+  let guarded = {};
+  if (trustedOfficialDns) {
+    try {
+      if (new URL(url).origin === SITE_ORIGIN) {
+        guarded = { ...webMediaRequestOptions(url, { trustedOfficialDns: true }), adapter: 'http' };
+      }
+    } catch (_) { /* a malformed URL is rejected by axios below */ }
+  }
   const res = await axios.get(url, {
+    ...guarded,
     headers: {
       'User-Agent': WEB_UA,
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -410,27 +421,52 @@ async function fetchEpisodeList(seriesId) {
   return cachedRequest(`episodes:${seriesId}`, 60000, () => fetchEpisodeListFresh(seriesId));
 }
 
+function describeWebLoadError(error) {
+  const message = String(error?.message || '');
+  if (error?.code === 'ERR_CANCELED' || /aborted|canceled|timeout|ECONNABORTED|ETIMEDOUT/i.test(message)) {
+    return '加载超时或连接中断';
+  }
+  return message || '加载失败';
+}
+
 async function fetchEpisodeListFromWeb(seriesId) {
   // Some /player pages are served from a broken CDN edge (hang then abort), while the
   // detail route for the same series is healthy. Race both; parse whichever is valid.
   const id = String(seriesId);
-  const race = async (timeout) => {
+  const race = async (timeout, trustedOfficialDns) => {
     const controller = new AbortController();
     const attempts = [
-      () => fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(id)}`, timeout, controller.signal),
-      () => fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, timeout, controller.signal),
+      () => fetchSiteHtml(`${SITE_ORIGIN}/player/${encodeURIComponent(id)}`, timeout, controller.signal, { trustedOfficialDns }),
+      () => fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, timeout, controller.signal, { trustedOfficialDns }),
     ].map(run => run().then(html => parseEpisodeListHtml(html, id)));
     attempts.forEach(promise => promise.catch(() => {}));
     try { return await Promise.any(attempts); }
     catch (aggregate) { throw aggregate.errors?.[0] || aggregate; }
     finally { controller.abort(); }
   };
-  try { return await race(8000); }
-  catch (first) {
-    // The bad edge is intermittent: retry the detail route once after a short delay.
-    await new Promise(resolve => setTimeout(resolve, 300));
-    try { return parseEpisodeListHtml(await fetchSiteHtml(`${SITE_ORIGIN}/detail?series_id=${encodeURIComponent(id)}`, 10000), id); }
-    catch (second) { throw new Error(`${first.message}；重试失败：${second.message}`); }
+  // A healthy page normally returns in well under a second. Do not leave the user
+  // staring at a hung CDN edge for eight seconds; retry on fresh connections sooner.
+  let firstValue = null;
+  let firstError = null;
+  const first = race(1500, true).then(value => {
+    firstValue = value; return value;
+  }, error => {
+    firstError = error; throw error;
+  });
+  const hedge = (async () => {
+    // Give the first attempt a short head start. A hung CDN edge usually reveals
+    // itself within this window; a healthy page has already returned by then.
+    await new Promise(resolve => setTimeout(resolve, 600));
+    if (firstValue) return firstValue; // the first attempt won; do not add traffic
+    // Keep trusted DNS for speed, but also retry the ordinary resolver so a blocked
+    // DoH endpoint cannot take the whole episode list down.
+    return Promise.any([race(3500, true), race(3500, false)]);
+  })();
+  try { return await Promise.any([first, hedge]); }
+  catch (aggregate) {
+    const nested = (aggregate.errors || [aggregate]).flatMap(error => error?.errors || [error]);
+    const second = nested.find(error => error !== firstError) || nested[0] || aggregate;
+    throw new Error(`${describeWebLoadError(firstError)}；重试失败：${describeWebLoadError(second)}`);
   }
 }
 

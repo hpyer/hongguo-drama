@@ -25,6 +25,8 @@
 
 **当前正式版：3.5**。三端发行资产已公开并核对远端摘要，双 Mac 应用及 DMG 已签名、公证与装订；Windows EXE 未签名。上一正式版为 [3.4](https://github.com/jackotom/hongguo-drama/releases/tag/v3.4)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
+**当前源码／发行目标：3.6**（内部 `3.6.0`）。分集拉取提速、双目录收尾与分页修复已完成本地验证；3.6 的正式构建、签名、公证和发布待完成，下方仍链接已发布的 3.5。详见 [3.6 说明](docs/release-3.6.md)。
+
 | 设备 | 下载 3.5 | 安装方式 |
 |---|---|---|
 | Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v3.5/Hongguo-3.5-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
@@ -48,6 +50,13 @@
 2. 在「发现短剧」浏览，或在「搜索与下载」输入剧名、红果分享链接或剧集 ID。
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
+
+## 3.6 分集拉取提速
+
+- 官网分集页优先走可信 DNS，避开会挂起的 CDN 边缘；首次只等 1.5 秒，0.6 秒未回就并行再开一组。
+- 重试同时走可信／普通 DNS 的 player 与 detail；备用接口 200 空响应自动重试，不再直接失败。
+- 真实 10 部剧集样本全部成功，0.49–1.21 秒，平均 0.81 秒；预览 UI 实测 0.75–1.12 秒。
+- 上游仍可能偶发断连；不承诺每部剧每次必然秒开。详见 [3.6 说明](docs/release-3.6.md)。
 
 ## 3.5 目录双线与分页恢复
 
@@ -441,11 +450,13 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
+当前源码目标为 **3.6**（内部 `3.6.0`），分集提速、目录双线和分页修复的本地证据见 [3.6 说明](docs/release-3.6.md)；正式发行前仍以 3.5 的已发布资产为准。
+
 当前正式版为 **3.5**（内部 `3.5.0`），目录双线、分页恢复与发行边界见 [3.5 说明](docs/release-3.5.md)。冻结源码 `34bdc9eabdd81ce42c6ed6a23516b245fe44d93e`；16 项附件的远端摘要和大小已核对，双 Mac 已签名、公证与装订，Windows EXE 未签名。[本轮 Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40266211450) 通过；Mac 冻结源码的随机两集下载、播放、定位、全屏与切集已验，最终签名包完成 arm64 原生与 x64 Rosetta 隔离启动/退出。音轨解码通过，未将其等同于人工听感确认。
 
 上一正式版 **3.4**（内部 3.4.0），搜索、便携资料与安全修复及验收边界见 [3.4 说明](docs/release-3.4.md)。冻结源码 `241ada2d604ce65dc15d3c4df3686716ece61865`；其 16 项附件、签名、公证和 Windows CI 结果保持不变。App 搜索仍是默认关闭的实验选项。
 
-更早正式版 **3.3**（内部 3.3.0）的下载降级与 Mac 界面缩放记录见 [3.3 说明](docs/release-3.3.md)。以下保留其历史验收结果，不代替 3.5 验收。
+更早正式版 **3.3**（内部 3.3.0）的下载降级与 Mac 界面缩放记录见 [3.3 说明](docs/release-3.3.md)。以下保留其历史验收结果，不代替 3.6 验收。
 
 3.3 安装包、对应源码与校验文件见 [3.3 发行页](https://github.com/jackotom/hongguo-drama/releases/tag/v3.3)。三端 16 项资产已公开并核对远端 SHA256；双 Mac 应用与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订；Windows CI 安装、重装、跨版本升级与便携媒体检查通过，EXE 未签名。 Windows 构建记录：[本轮 CI](https://github.com/jackotom/hongguo-drama/actions/runs/40156845982)。
 

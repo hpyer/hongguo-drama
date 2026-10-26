@@ -106,9 +106,15 @@ async function detail(seriesId) {
   return result;
 }
 
+// Only exact, verified upstream metadata conflicts. Do not infer a conflict from a
+// title that merely looks like another drama; false positives hide legitimate episode names.
+const VERIFIED_TITLE_CONFLICTS = new Map([
+  ['xifan:jiuzhou:253\u0000天龙战神', new Set(['爱归良辰'])],
+]);
+
 function episodeDisplayTitle(seriesId, seriesTitle, title) {
-  // shortcut: 仅兼容已核实的上游元数据冲突；上游改名后保留新值，其他别名不猜测。
-  return seriesId === 'xifan:jiuzhou:253' && seriesTitle === '天龙战神' && title === '爱归良辰' ? '' : title;
+  const blocked = VERIFIED_TITLE_CONFLICTS.get(`${seriesId}\u0000${seriesTitle}`);
+  return blocked?.has(title) ? '' : title;
 }
 
 async function fetchEpisodeList(seriesId) {
