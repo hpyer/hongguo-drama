@@ -32,9 +32,9 @@
 | Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
 | Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.0 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.0) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.1 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.1) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/SHA256SUMS.txt)
 
-- **升级到 4.0**：3.9 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
+- **升级到 4.1**：4.0 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
