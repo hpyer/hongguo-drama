@@ -33,9 +33,12 @@ test('IPC persists source changes, notifies every window, and blocks disabled se
     const context = {
       require: name => { assert.equal(name, './src/native/media-sources'); return { getMediaSources, setBuiltinSourceEnabled }; },
       store, getCurrentSettings: () => store.getSettings(),
+      seriesSearch: { searchSeries: (keyword, load) => load(keyword) },
       BrowserWindow: { getAllWindows: () => [1, 2].map(id => ({ webContents: { isDestroyed: () => false, send: event => events.push([id, event]) } })) },
       ipcMain: { handle: (name, fn) => handlers[name] = fn }, console,
     };
+    const searchStart = source.indexOf('async function searchAtSource(');
+    vm.runInNewContext(source.slice(searchStart, source.indexOf('\n}', searchStart) + 2), context);
     for (const name of ['get-media-sources', 'set-builtin-source-enabled', 'browse-list', 'search-series', 'search-series-more']) {
       const start = source.indexOf(`ipcMain.handle('${name}'`);
       const end = name === 'get-media-sources' ? source.indexOf('\n', start) : source.indexOf('\n});', start) + 4;

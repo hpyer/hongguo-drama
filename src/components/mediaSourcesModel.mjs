@@ -21,7 +21,7 @@ export function mediaSourceLabel(seriesOrSource, sources = BUILTIN_MEDIA_SOURCES
 }
 
 export function createMediaSourcesStore(load) {
-  let snapshot = { sources: BUILTIN_MEDIA_SOURCES, revision: 0, loading: false, error: '' };
+  let snapshot = { sources: BUILTIN_MEDIA_SOURCES, revision: 0, loading: true, error: '' };
   let pending = null, loaded = false;
   const listeners = new Set();
   const emit = patch => { snapshot = { ...snapshot, ...patch }; listeners.forEach(listener => listener()); };

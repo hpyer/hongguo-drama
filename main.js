@@ -1549,6 +1549,7 @@ async function searchAtSource(keyword, options = {}) {
   const page = options.page === undefined ? 1 : options.page;
   if (!Number.isSafeInteger(page) || page < 1 || page > 50) throw new Error('搜索页码必须是 1 至 50 的整数');
   const source = options.source || 'hongguo';
+  if (['xifan', 'hema'].includes(source) && getCurrentSettings().builtin_sources?.[source] === false) throw new Error('此来源已关闭，可在设置中重新开启');
   if (page > 1 && source !== 'hongguo' && options.channel && options.channel !== source) throw new Error('搜索通道已变化，请重新搜索');
   const response = await searchAtSourcePage(keyword, { ...options, page });
   if (!response?.success) return response;
@@ -1743,7 +1744,6 @@ async function searchAtSourcePage(keyword, options = {}) {
 
 ipcMain.handle('search-series', async (event, keyword, options = {}) => {
   try {
-    if (['xifan', 'hema'].includes(options?.source) && getCurrentSettings().builtin_sources?.[options.source] === false) throw new Error('此来源已关闭，可在设置中重新开启');
     const deadline = Date.now() + 20000;
     return await seriesSearch.searchSeries(keyword, (kw, call) => searchAtSource(kw, { ...options, deadline, ...(call || {}) }), [], { deadline });
   } catch (error) {
@@ -1754,7 +1754,6 @@ ipcMain.handle('search-series', async (event, keyword, options = {}) => {
 
 ipcMain.handle('search-series-more', async (event, keyword, options = {}) => {
   try {
-    if (['xifan', 'hema'].includes(options?.source) && getCurrentSettings().builtin_sources?.[options.source] === false) throw new Error('此来源已关闭，可在设置中重新开启');
     if (!Number.isSafeInteger(options?.page) || options.page < 2 || options.page > 50) throw new Error('加载更多页码必须是 2 至 50 的整数');
     const deadline = Date.now() + 12000;
     return await searchAtSource(keyword, { ...options, deadline, fuzzy: false });
