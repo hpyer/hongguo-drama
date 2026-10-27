@@ -38,7 +38,8 @@ const hongguoSearch = { searchHongguo: async keyword => {
 } };
 const context = vm.createContext({ require: name => name === 'electron' ? electron
   : name === './src/native/hongguo' ? native : name === './src/store' ? store
-    : name === './src/native/hongguo-search' ? hongguoSearch : req(name),
+    : name === './src/native/hongguo-search' ? hongguoSearch
+      : name === './src/native/hongguo-app-new' ? { searchNewReleasesDetailed: async () => ({ results: [], partial: false }) } : req(name),
   __dirname: path.dirname(file), process, Buffer, URL, Response, Request, Headers, AbortController,
   setTimeout, clearTimeout, console: { log() {}, warn() {}, error() {} } });
 vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
@@ -52,6 +53,7 @@ function reset(settings = {}) {
   store.saveSeries([series(), { ...series(), series_id: '1000003', series_title: '仅打开' }]);
   store.savePlayback({});
   context.loadSeriesRegistry();
+  vm.runInContext('historySequelCache.clear()', context);
   fetchDetail = async id => { assert.equal(id, sid); return series(); };
   search = async () => ({ success: true, results: [] });
   events.length = notifications.length = 0;
@@ -193,6 +195,7 @@ async function check(name, fn) {
     const laterSequel = { series_id: '1000004', series_title: '春日来信第三季' };
     fetchDetail = async () => series(6);
     search = async () => ({ success: true, results: [sequel, laterSequel] });
+    vm.runInContext('historySequelCache.clear()', context);
     await ipc('refresh-watch-history');
     await ipc('acknowledge-watch-updates', sid, {
       total: viewed.total, sequelIds: viewed.sequels.map(item => item.series_id),
@@ -243,6 +246,7 @@ async function check(name, fn) {
     await ipc('acknowledge-watch-updates', sid);
     fetchDetail = async () => series(4);
     search = async () => ({ success: false, error: 'search unavailable' });
+    vm.runInContext('historySequelCache.clear()', context);
     const result = await ipc('refresh-watch-history');
     assert.equal(result.checked, 1);
     assert.equal(result.failed, 1);
@@ -267,6 +271,7 @@ async function check(name, fn) {
     await ipc('refresh-watch-history');
     assert.equal(notifications.length, 1);
     search = async () => ({ success: true, results: [sequel] });
+    vm.runInContext('historySequelCache.clear()', context);
     await ipc('refresh-watch-history');
     assert.equal(notifications.length, 2);
     await ipc('acknowledge-watch-updates', sid);
