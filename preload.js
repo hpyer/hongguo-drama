@@ -1,10 +1,15 @@
-// 红果短剧 4.0：桌面桥接入口，发行说明见 docs/release-4.0.md。
+// 红果短剧 4.1：桌面桥接入口，发行说明见 docs/release-4.1.md。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getPublicDetails: (seriesId, vid) => ipcRenderer.invoke('get-public-details', seriesId, vid),
   getEpisodeComments: options => ipcRenderer.invoke('get-episode-comments', options),
   getEpisodeDanmaku: options => ipcRenderer.invoke('get-episode-danmaku', options),
+  onTextExportDone: cb => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('text-export-done', listener);
+    return () => ipcRenderer.removeListener('text-export-done', listener);
+  },
   setStealthMode: enabled => ipcRenderer.invoke('set-stealth-mode', enabled),
   onStealthState: cb => {
     const listener = (_event, state) => cb(state);

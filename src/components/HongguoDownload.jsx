@@ -20,11 +20,20 @@ function HongguoDownload({ onNavigate, active = true }) {
   const [selectedVids, setSelectedVids] = useState(new Set());
   const [rangeInput, setRangeInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [exportKinds, setExportKinds] = useState({ danmaku: false, comments: false, reviews: false });
+  const [exportNote, setExportNote] = useState('');
+  const [exportSettingsNote, setExportSettingsNote] = useState('');
+  const exportInitialized = useRef(false);
+  const textExportRequest = useRef(null);
+  const seriesIdRef = useRef(null);
+  seriesIdRef.current = seriesData?.series_id;
   const [downloadQuality, setDownloadQuality] = useState('auto');
   const [qualityLoading, setQualityLoading] = useState(true);
   const [openingPlayer, setOpeningPlayer] = useState(false);
   const playPending = useRef(false);
   const firstPlayable = seriesData?.episodes.find((ep) => !ep.locked);
+  // 评论/弹幕/剧评仅红果来源可取（取数函数都以纯数字 ID 为前置校验）；其它来源隐藏导出勾选。
+  const isHongguoSource = /^\d{6,30}$/.test(String(seriesData?.series_id || ''));
   const resolveRequest = useRef(0);
   const pendingResolve = useRef(null);
   const searchVersion = resolveRequest.current;
@@ -41,11 +50,41 @@ function HongguoDownload({ onNavigate, active = true }) {
     setQualityLoading(true);
     window.electronAPI.getSettings().then((settings) => {
       if (!cancelled) setDownloadQuality(['1080p', '720p'].includes(settings?.download_quality) ? settings.download_quality : 'auto');
+      if (!cancelled && !exportInitialized.current) {
+        const et = settings?.export_text || {};
+        setExportKinds({ danmaku: et.danmaku === true, comments: et.comments === true, reviews: et.reviews === true });
+        exportInitialized.current = true;
+      }
     }).catch(() => {
       if (!cancelled) setErrorMsg('默认下载清晰度读取失败，请确认清晰度后再下载');
     }).finally(() => { if (!cancelled) setQualityLoading(false); });
     return () => { cancelled = true; };
   }, [active]);
+
+  // 文字导出转为后台任务，完成后经 text-export-done 事件回报；本订阅只更新提示文案，不阻塞下载。
+  useEffect(() => {
+    const off = window.electronAPI?.onTextExportDone?.((data) => {
+      const request = textExportRequest.current;
+      if (!data || !request || request.done || data.requestId !== request.requestId
+        || String(data.seriesId) !== String(request.seriesId)
+        || String(data.seriesId) !== String(seriesIdRef.current)) return;
+      request.done = true;
+      const k = request.kinds;
+      const part = (key, label) => k[key] && data[key]
+        ? `${label} ${data[key].ok} 份${Number.isFinite(data[key].items) ? `，${data[key].items} 条` : ''}${data[key].empty ? `（空数据${data[key].empty}份）` : ''}${data[key].skipped ? `（跳过${data[key].skipped}）` : ''}${data[key].unavailable ? `，来源未开放${data[key].unavailable}集（未生成文件）` : ''}${data[key].fail ? `，失败${data[key].fail}` : ''}${data[key].partial ? `，部分${data[key].partial}（仅保存已获取数据）` : ''}` : null;
+      const bits = [part('danmaku', '弹幕'), part('comments', '评论'), part('reviews', '剧评')].filter(Boolean);
+      setExportNote(data.failed
+        ? `文字导出未完成：${data.error || '未知错误'}`
+        : `文字导出结果：${bits.join('、') || '无'}${(k.comments || k.reviews) ? '（评论/剧评受官网限制，仅公开可读部分）' : ''}`);
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+
+  const clearTextExport = () => {
+    textExportRequest.current = null;
+    setExportNote('');
+    setExportSettingsNote('');
+  };
 
   const switchTab = (next) => {
     if (next === tab) return;
@@ -64,6 +103,7 @@ function HongguoDownload({ onNavigate, active = true }) {
     setErrorMsg('');
     setTab('input');
     setSeriesData(data);
+    clearTextExport();
     setSelectedVids(new Set(data.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid)));
     setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接播放或提交下载`);
     document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -84,6 +124,7 @@ function HongguoDownload({ onNavigate, active = true }) {
     setErrorMsg('');
     setSuccessMsg('');
     setSeriesData(null);
+    clearTextExport();
     setSelectedVids(new Set());
 
     try {
@@ -190,6 +231,12 @@ function HongguoDownload({ onNavigate, active = true }) {
       setErrorMsg('请至少勾选一集欲下载的短剧');
       return;
     }
+    const kinds = isHongguoSource ? { ...exportKinds } : { danmaku: false, comments: false, reviews: false };
+    const wantExport = kinds.danmaku || kinds.comments || kinds.reviews;
+    const request = { requestId: crypto.randomUUID(), seriesId: seriesData.series_id, kinds, done: !wantExport };
+    textExportRequest.current = request;
+    setExportNote(wantExport ? '正在后台导出文字数据…' : '');
+    setExportSettingsNote('');
     setSubmitting(true);
     setErrorMsg('');
     setSuccessMsg('');
@@ -200,14 +247,31 @@ function HongguoDownload({ onNavigate, active = true }) {
         seriesTitle: seriesData.series_title,
         episodes: selectedEps,
         quality: downloadQuality,
+        export: kinds,
+        requestId: request.requestId,
       });
+      const isCurrent = () => textExportRequest.current === request && seriesIdRef.current === request.seriesId;
       if (res.success) {
-        setSuccessMsg(`已成功将 ${res.count} 集提交至下载队列！点击下方按钮跳转至“下载管理”查看实时进度。`);
-      } else {
+        if (isHongguoSource) {
+          // 偏好保存失败不改变已提交的视频任务或后台导出结果。
+          Promise.resolve().then(() => window.electronAPI.saveSettings({ export_text: kinds })).then(saved => {
+            if (!saved?.success) throw new Error(saved?.error || '请稍后重试');
+          }).catch(error => {
+            if (isCurrent()) setExportSettingsNote(`导出选项未保存：${error.message || '请稍后重试'}；本次视频已提交，文字导出不受影响。`);
+          });
+        }
+        if (isCurrent()) setSuccessMsg(`已成功将 ${res.count} 集提交至下载队列！点击下方按钮跳转至“下载管理”查看实时进度。`);
+      } else if (isCurrent()) {
+        textExportRequest.current = null;
+        setExportNote('');
         setErrorMsg(res.error || '提交下载失败');
       }
     } catch (err) {
-      setErrorMsg('提交下载异常: ' + err.message);
+      if (textExportRequest.current === request && seriesIdRef.current === request.seriesId) {
+        textExportRequest.current = null;
+        setExportNote('');
+        setErrorMsg('提交下载异常: ' + err.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -331,35 +395,52 @@ function HongguoDownload({ onNavigate, active = true }) {
             </div>
 
             <div className="batch-action-bar">
-              <button className="btn btn-outline" onClick={handlePlay}
-                disabled={openingPlayer || !firstPlayable}
-                title={firstPlayable ? '在我的剧库播放，未下载的分集会在线播放' : '当前剧集没有可播放的分集'}>
-                {openingPlayer ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-                <span>{openingPlayer ? '正在打开…' : '立即播放'}</span>
-              </button>
-              <label className="batch-quality-control">
-                <span>下载清晰度</span>
-                <select className="input-field" value={downloadQuality}
-                  aria-describedby="batch-quality-hint" disabled={qualityLoading || submitting}
-                  onChange={(event) => setDownloadQuality(event.target.value)}>
-                  <option value="auto">自动（兼容优先）</option>
-                  <option value="1080p">1080P</option>
-                  <option value="720p">720P</option>
-                </select>
-              </label>
-              <button
-                className="btn btn-primary"
-                onClick={handleBatchDownload}
-                disabled={qualityLoading || submitting || selectedVids.size === 0}
-              >
-                <Download size={16} />
-                <span>下载选中集数 ({selectedVids.size}/{seriesData.total})</span>
-              </button>
-              {onNavigate && (
-                <button className="btn btn-outline" onClick={() => onNavigate('manager')}>
-                  <Folder size={16} />
-                  <span>查看下载管理</span>
+              <div className="batch-action-row">
+                <button className="btn btn-outline" onClick={handlePlay}
+                  disabled={openingPlayer || !firstPlayable}
+                  title={firstPlayable ? '在我的剧库播放，未下载的分集会在线播放' : '当前剧集没有可播放的分集'}>
+                  {openingPlayer ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
+                  <span>{openingPlayer ? '正在打开…' : '立即播放'}</span>
                 </button>
+                <label className="batch-quality-control">
+                  <span>下载清晰度</span>
+                  <select className="input-field" value={downloadQuality}
+                    aria-describedby="batch-quality-hint" disabled={qualityLoading || submitting}
+                    onChange={(event) => setDownloadQuality(event.target.value)}>
+                    <option value="auto">自动（兼容优先）</option>
+                    <option value="1080p">1080P</option>
+                    <option value="720p">720P</option>
+                  </select>
+                </label>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleBatchDownload}
+                  disabled={qualityLoading || submitting || selectedVids.size === 0}
+                >
+                  <Download size={16} />
+                  <span>下载选中集数 ({selectedVids.size}/{seriesData.total})</span>
+                </button>
+                {onNavigate && (
+                  <button className="btn btn-outline" onClick={() => onNavigate('manager')}>
+                    <Folder size={16} />
+                    <span>查看下载管理</span>
+                  </button>
+                )}
+              </div>
+              {isHongguoSource && (
+                <div className="batch-export-controls" role="group" aria-label="随下载导出的文字数据">
+                  <span className="batch-export-title">随下载导出</span>
+                  {[['danmaku', '弹幕'], ['comments', '评论'], ['reviews', '剧评']].map(([key, label]) => (
+                    <label key={key} className="batch-export-check">
+                      <input type="checkbox" aria-label={label} checked={exportKinds[key]}
+                        disabled={qualityLoading || submitting}
+                        onChange={(event) => setExportKinds(prev => ({ ...prev, [key]: event.target.checked }))} />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                  {exportNote && <span className="batch-export-note" role="status">{exportNote}</span>}
+                  {exportSettingsNote && <span className="batch-export-note" role="alert">{exportSettingsNote}</span>}
+                </div>
               )}
             </div>
           </div>
