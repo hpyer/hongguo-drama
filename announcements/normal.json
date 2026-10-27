@@ -1,6 +1,6 @@
 {
-  "id": "normal-preview-20261027-01",
-  "title": "普通公告显示预览",
-  "body": "这是一条普通公告，供查看弹窗效果。\n\n后续如果播放或下载出现异常，这里会说明已确认的情况与处理进展。\n\n你可以选择下方的提醒方式，也可以直接关闭。没有操作时，公告将在 30 秒后自动消失。",
+  "id": "feature-feedback-20261027-01",
+  "title": "功能建议与反馈",
+  "body": "有想要增加的功能，欢迎通过 GitHub 或邮箱反馈。\n\nGitHub：https://github.com/jackotom/hongguo-drama/issues\n邮箱：jaoktom@outlook.com\n\n请简单说明使用场景和期望效果，方便我们了解你的需求。",
   "active": true
 }
