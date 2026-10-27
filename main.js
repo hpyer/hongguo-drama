@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 4.0 下载器（独立版）主进程
+ * main.js - 红果短剧 4.1 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -57,6 +57,7 @@ const { createAnnouncementService } = require('./src/native/app-announcements');
 const { fetchPublicDetails } = require('./src/native/public-details');
 const { fetchEpisodeComments } = require('./src/native/episode-comments');
 const { fetchDanmaku, setDeviceIdentityFile } = require('./src/native/danmaku');
+const { exportSeriesText } = require('./src/native/text-export');
 const mediaAccess = require('./src/native/media-access').createMediaAccess(process.env.VITE_DEV_SERVER_URL);
 const rendererSecurity = require('./src/native/renderer-security').createRendererSecurity(
   path.join(__dirname, 'dist-react', 'index.html'), process.env.VITE_DEV_SERVER_URL);
@@ -3573,12 +3574,33 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover, quality
 
 ipcMain.handle('hongguo-download-batch', async (event, payload) => {
   try {
-    const { seriesId, seriesTitle, episodes, quality } = payload || {};
+    const { seriesId, seriesTitle, episodes, quality, export: exportKinds } = payload || {};
     if (!Array.isArray(episodes) || episodes.length === 0) {
       return { success: false, error: '未选择集数' };
     }
     const count = await enqueueEpisodes({ seriesId, seriesTitle, episodes, quality });
-    return { success: true, count, requested: episodes.length };
+    const kinds = normalizeTextExportKinds(exportKinds);
+    const exportRequested = /^\d{6,30}$/.test(String(seriesId)) && Object.values(kinds).some(Boolean);
+    const requestId = typeof payload.requestId === 'string' && payload.requestId.length <= 128 && payload.requestId
+      ? payload.requestId : randomUUID();
+    if (exportRequested) {
+      Promise.resolve().then(() => {
+        // Reuse persisted task destinations, including old settings and repaired filename conflicts.
+        const destinations = episodes.map(ep => {
+          const task = downloadTasks.find(item => String(item.hongguoInfo?.series_id) === String(seriesId)
+            && String(item.hongguoInfo?.vid) === String(ep.vid));
+          if (!task?.savePath) throw new Error('找不到分集下载路径，请重新提交');
+          return { vid: String(task.hongguoInfo.vid), vid_index: task.hongguoInfo.vid_index, savePath: task.savePath };
+        });
+        const title = sanitizeFolderName(seriesTitle) || '红果短剧';
+        return exportSeriesText({ seriesId: String(seriesId), seriesTitle, episodes: destinations, kinds,
+          reviewsPath: path.join(path.dirname(destinations[0].savePath), `${title}.reviews.json`) });
+      }).then(result => sendToRenderer('text-export-done', { ...result, requestId, seriesId, kinds }))
+        .catch(error => sendToRenderer('text-export-done', {
+          requestId, seriesId, kinds, failed: true, error: String(error?.message || error),
+        }));
+    }
+    return { success: true, count, requested: episodes.length, exportRequested, requestId };
   } catch (error) {
     console.error('[Hongguo] 提交批量下载失败:', error.message);
     return { success: false, error: error.message };
@@ -3899,7 +3921,11 @@ ipcMain.handle('select-folder', async () => {
   return result.filePaths[0];
 });
 
-const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
+const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'export_text', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
+
+function normalizeTextExportKinds(value) {
+  return { danmaku: value?.danmaku === true, comments: value?.comments === true, reviews: value?.reviews === true };
+}
 
 function settingsForRenderer(settings) {
   const copy = { ...settings };
@@ -3915,6 +3941,7 @@ function applyEditableSettings(current, incoming) {
     if (key === 'proxy_password') continue;
     if (Object.prototype.hasOwnProperty.call(source, key)) merged[key] = source[key];
   }
+  if (Object.prototype.hasOwnProperty.call(source, 'export_text')) merged.export_text = normalizeTextExportKinds(source.export_text);
   if (source.clear_proxy_password === true) merged.proxy_password = '';
   else if (typeof source.proxy_password === 'string' && source.proxy_password.length > 0) merged.proxy_password = source.proxy_password;
   else merged.proxy_password = current.proxy_password || '';

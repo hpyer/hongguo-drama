@@ -1135,6 +1135,105 @@ async function mount(file, api, props = {}, storage = null) {
     assert.ok(ui.button('下载选中集数 (1/2)')); assert.ok(ui.find(n => n.props.className?.startsWith('episode-card') && n.props.disabled));
     await ui.button('下载选中集数').props.onClick(); assert.equal(submitted.episodes.length, 1); assert.equal(submitted.episodes[0].vid_index, 2); ui.unmount();
   });
+  const textExportFixture = async (api = {}, seriesId = '7503745441910017049') => {
+    let listener, unsubscribed = false;
+    const requests = [], saved = [];
+    const ui = await mount('HongguoDownload', {
+      getSettings: async () => ({ export_text: { comments: true } }),
+      saveSettings: async settings => { saved.push(settings); return { success: true }; },
+      hongguoDownloadBatch: async payload => { requests.push(payload); return { success: true, count: 2, exportRequested: true, requestId: payload.requestId }; },
+      onTextExportDone: cb => { listener = cb; return () => { unsubscribed = true; }; },
+      ...api,
+    });
+    await ui.flush();
+    const select = id => { ui.find(n => n.props.onSelectSeries).props.onSelectSeries(detail(id)); ui.render(); };
+    select(seriesId);
+    return { ui, requests, saved, select, unsubscribed: () => unsubscribed,
+      emit: (request, result = {}) => { assert.equal(typeof listener, 'function', 'must subscribe to text export results'); listener({ requestId: request.requestId, seriesId: request.seriesId, kinds: request.export, comments: { ok: 2, fail: 0, skipped: 0, partial: 0 }, ...result }); ui.render(); },
+      check: (label, checked) => { const box = ui.find(n => n.props.type === 'checkbox' && n.props['aria-label'] === label); assert.ok(box, `missing ${label} export checkbox`); box.props.onChange({ target: { checked } }); ui.render(); },
+    };
+  };
+  await test('HongguoDownload text export completion before response stays completed', async () => {
+    const pending = deferred(); let request;
+    const f = await textExportFixture({ hongguoDownloadBatch: payload => { request = payload; return pending.promise; } });
+    const submit = f.ui.button('下载选中集数').props.onClick(); f.ui.render();
+    assert.match(request.requestId || '', /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i, 'each submission needs a UUID');
+    assert.ok(f.ui.text().includes('正在后台导出'), 'pending must be visible before the response');
+    f.emit(request); assert.ok(f.ui.text().includes('评论 2'));
+    pending.resolve({ success: true, count: 2, exportRequested: true, requestId: request.requestId }); await submit; await f.ui.flush();
+    assert.ok(f.ui.text().includes('评论 2')); assert.ok(!f.ui.text().includes('正在后台导出'));
+    assert.equal(f.saved[0]?.export_text.comments, true); f.ui.unmount(); assert.equal(f.unsubscribed(), true);
+  });
+  await test('HongguoDownload text export snapshot keeps failures and partial after checkbox changes', async () => {
+    const f = await textExportFixture();
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    f.check('评论', false); f.check('弹幕', true);
+    f.emit(f.requests[0], { comments: { ok: 1, fail: 1, skipped: 0, partial: 1 }, danmaku: { ok: 0, fail: 0, skipped: 0, partial: 0 } });
+    assert.ok(f.ui.text().includes('评论 1')); assert.ok(f.ui.text().includes('失败1')); assert.ok(f.ui.text().includes('部分1'));
+    assert.ok(!f.ui.text().includes('弹幕 0')); f.ui.unmount();
+  });
+  await test('HongguoDownload text export distinguishes empty files from actual content', async () => {
+    const f = await textExportFixture({ getSettings: async () => ({ export_text: { danmaku: true } }) });
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    f.emit(f.requests[0], { danmaku: { ok: 2, fail: 0, skipped: 0, partial: 0, items: 0, empty: 2 } });
+    assert.ok(f.ui.text().includes('0 条'));
+    assert.ok(f.ui.text().includes('空数据2份'));
+    f.ui.unmount();
+  });
+  await test('HongguoDownload text export ignores older requestId for the same series', async () => {
+    const f = await textExportFixture();
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    assert.ok(f.requests[0].requestId); assert.notEqual(f.requests[0].requestId, f.requests[1].requestId);
+    f.emit(f.requests[0], { failed: true, error: '旧任务失败' });
+    assert.ok(f.ui.text().includes('正在后台导出')); assert.ok(!f.ui.text().includes('旧任务失败'));
+    f.emit(f.requests[1]); assert.ok(f.ui.text().includes('评论 2'));
+    f.emit(f.requests[0], { failed: true, error: '旧任务失败' }); assert.ok(!f.ui.text().includes('旧任务失败')); f.ui.unmount();
+  });
+  await test('HongguoDownload text export labels source unavailable separately from empty and failure', async () => {
+    const f = await textExportFixture();
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    f.emit(f.requests[0], { comments: { ok: 0, fail: 0, skipped: 0, partial: 0, items: 0, empty: 0, unavailable: 2 } });
+    const note = f.ui.find(n => n.props.className === 'batch-export-note' && n.props.role === 'status').children.join('');
+    assert.ok(note.includes('来源未开放2集'));
+    assert.ok(!note.includes('空数据'));
+    assert.ok(!note.includes('失败'));
+    f.ui.unmount();
+  });
+  await test('HongguoDownload text export ignores late results after changing series', async () => {
+    const f = await textExportFixture();
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    f.select('7503745441910017050'); f.emit(f.requests[0], { failed: true, error: '前剧失败' });
+    assert.ok(!f.ui.text().includes('前剧失败')); assert.ok(!f.ui.text().includes('正在后台导出'));
+    f.select(f.requests[0].seriesId); f.emit(f.requests[0]); assert.ok(!f.ui.text().includes('评论 2')); f.ui.unmount();
+  });
+  await test('HongguoDownload text export keeps unsent choices across active changes and refreshes quality', async () => {
+    let quality = 'auto';
+    const f = await textExportFixture({ getSettings: async () => ({ download_quality: quality, export_text: { comments: true } }) });
+    f.check('评论', false); f.check('剧评', true);
+    f.ui.setProps({ active: false }); quality = '720p'; f.ui.setProps({ active: true }); await f.ui.flush();
+    assert.equal(f.ui.find(n => n.props['aria-label'] === '评论').props.checked, false);
+    assert.equal(f.ui.find(n => n.props['aria-label'] === '剧评').props.checked, true);
+    assert.equal(f.ui.find(n => n.type === 'select' && n.props['aria-describedby'] === 'batch-quality-hint').props.value, '720p'); f.ui.unmount();
+  });
+  await test('HongguoDownload text export is hidden and disabled for non Hongguo sources', async () => {
+    const f = await textExportFixture({}, 'xifan:test:A');
+    assert.ok(!f.ui.find(n => n.props.type === 'checkbox' && n.props['aria-label'] === '评论'));
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(f.requests[0].export)), { danmaku: false, comments: false, reviews: false });
+    assert.ok(!f.ui.text().includes('正在后台导出')); f.ui.unmount();
+  });
+  for (const rejected of [false, true]) await test(`HongguoDownload text export preference save ${rejected ? 'rejection' : 'failure'} does not claim video failure`, async () => {
+    const f = await textExportFixture({ saveSettings: async () => { if (rejected) throw new Error('磁盘不可写'); return { success: false, error: '磁盘不可写' }; } });
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    assert.ok(f.ui.text().includes('已成功将 2 集提交')); assert.ok(f.ui.text().includes('导出选项未保存')); assert.ok(f.ui.text().includes('磁盘不可写'));
+    assert.ok(!f.ui.text().includes('提交下载异常')); f.emit(f.requests[0]); assert.ok(f.ui.text().includes('评论 2')); f.ui.unmount();
+  });
+  await test('HongguoDownload text export failed submission clears pending and does not save preferences', async () => {
+    const f = await textExportFixture({ hongguoDownloadBatch: async () => ({ success: false, error: '无法加入队列' }) });
+    await f.ui.button('下载选中集数').props.onClick(); await f.ui.flush();
+    assert.ok(f.ui.text().includes('无法加入队列')); assert.ok(!f.ui.text().includes('正在后台导出')); assert.equal(f.saved.length, 0); f.ui.unmount();
+  });
   await test('xifan browse locks selection and starts the first unlocked episode', async () => {
     const data = detail('X'); data.episodes[0].locked = true; let played, submitted;
     const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: async () => ({ success: true, results: [{ series_id: 'X', series_title: 'X' }] }), searchResolve: async () => ok(data), getSeriesEpisodes: async () => ok(data), playSeries: async p => { played = p; return { success: false }; }, hongguoDownloadBatch: async p => { submitted = p; return { success: false }; } });
