@@ -90,7 +90,7 @@ export default function CustomSources({ active = true }) {
     {error && <div className="custom-source-error" role="alert"><p>{error}</p><button className="btn btn-outline btn-sm" disabled={!!busy || loading} onClick={() => { setError(''); load(); }}>重新读取配置</button></div>}
     <div className="custom-source-list" aria-label="已保存的自定义源">
       {loading && <p className="settings-hint" role="status">正在读取来源…</p>}
-      {!loading && sources.length === 0 && <p className="settings-hint">还没有自定义源。内置的红果、西饭和河马照常可用。</p>}
+      {!loading && sources.length === 0 && <p className="settings-hint">还没有自定义源。内置来源可在上方设置。</p>}
       {sources.map(source => <div className="custom-source-row" key={source.id}>
         <div className="custom-source-info"><strong>{source.name}</strong><span>{source.enabled ? '已启用' : '已停用'}</span><p>{source.url}</p></div>
         <div className="custom-source-actions"><button className="btn btn-outline btn-sm" disabled={!!busy} onClick={() => persist({ ...source, enabled: !source.enabled }, 'toggle')}>{source.enabled ? '停用' : '启用'}</button>

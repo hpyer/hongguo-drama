@@ -120,6 +120,61 @@ async function mount(file, api, props = {}, storage = null) {
 (async () => {
   let failures = 0;
   const test = async (name, fn) => { if (process.argv[2] && !new RegExp(process.argv[2]).test(name)) return; try { await fn(); console.log(`PASS ${name}`); } catch (e) { failures++; console.error(`FAIL ${name}: ${e.stack}`); } };
+  await test('builtin sources settings lock hongguo and persist toggles with failure recovery', async () => {
+    let enabled = true, fail = false;
+    const saved = [];
+    const ui = await mount('BuiltinSources', {
+      getMediaSources: async () => ({ success: true, sources: [{ id: 'hongguo', label: '红果' }, ...(enabled ? [{ id: 'xifan', label: '西饭' }] : []), { id: 'hema', label: '河马' }] }),
+      setBuiltinSourceEnabled: async (id, value) => {
+        saved.push([id, value]);
+        if (fail) return { success: false, error: '磁盘空间不足' };
+        enabled = value; ui.dispatchEvent(new Event('custom-sources-changed'));
+        return { success: true };
+      },
+    });
+    await ui.flush();
+    const toggle = id => ui.find(n => n.props['aria-label'] === `${id}来源`);
+    assert.equal(toggle('红果').props.checked, true);
+    assert.equal(toggle('红果').props.disabled, true);
+    await toggle('西饭').props.onChange({ target: { checked: false } }); await ui.flush();
+    assert.deepEqual(saved, [['xifan', false]]);
+    assert.equal(toggle('西饭').props.checked, false);
+    assert.equal(toggle('河马').props.checked, true);
+    fail = true;
+    await toggle('西饭').props.onChange({ target: { checked: true } }); await ui.flush();
+    assert.equal(toggle('西饭').props.checked, false);
+    assert.ok(ui.text().includes('磁盘空间不足'));
+    ui.unmount();
+  });
+  await test('builtin source changes invalidate global search and catalogs including late responses', async () => {
+    for (const component of ['SearchPanel', 'Browse', 'DramaFeed', 'RandomDrama']) {
+      let enabled = true;
+      const calls = [], late = deferred();
+      const ui = await mount(component, {
+        getMediaSources: async () => ({ success: true, sources: [{ id: 'hongguo', label: '红果' }, ...(enabled ? [{ id: 'xifan', label: '西饭' }] : [])] }),
+        getSeriesList: async () => [], browseCategories: async () => [],
+        browseList: async request => { calls.push(request.source); return request.source === 'xifan' ? late.promise : { success: true, results: [] }; },
+        searchSeries: async (kw, request) => { calls.push(request.source); return request.source === 'xifan' ? late.promise : { success: true, results: [] }; },
+      }, { active: true });
+      await ui.flush();
+      const source = ui.find(n => n.type === 'select' && n.children.some(c => c?.type === 'option' && c.props.value === 'xifan'));
+      source.props.onChange({ target: { value: 'xifan' } }); await ui.flush();
+      if (component === 'SearchPanel') {
+        ui.find(n => n.type === 'input' && n.props.type === 'text').props.onChange({ target: { value: '测试短剧' } }); ui.render();
+        ui.button('搜索').props.onClick(); await ui.flush();
+      }
+      enabled = false;
+      ui.dispatchEvent(new Event('custom-sources-changed')); await ui.flush();
+      assert.equal(ui.find(n => n.type === 'option' && n.props.value === 'xifan'), undefined, component);
+      late.resolve({ success: true, results: [{ series_id: 'xifan:drama:1', series_title: '已关闭来源的迟到片单' }] }); await ui.flush();
+      assert.ok(!ui.text().includes('已关闭来源的迟到片单'), component);
+      if (component === 'SearchPanel') {
+        calls.length = 0; ui.button('搜索').props.onClick(); await ui.flush();
+        assert.deepEqual(calls, ['hongguo']);
+      } else assert.equal(calls.at(-1), 'hongguo', component);
+      ui.unmount();
+    }
+  });
   await test('catalog integration page failure keeps actual page and retries without skipping', async () => {
     const { fixture, categoryPayload } = require('../../scripts/check-app-catalog.cjs');
     let failSecond = true;

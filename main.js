@@ -1424,10 +1424,16 @@ async function invalidateCustomSource(id) {
   try { saveDownloadTasks(); } catch (_) { /* storage-error already reports task persistence independently. */ }
 }
 ipcMain.handle('get-custom-sources', async () => ({success:true,sources:getCurrentSettings().custom_sources || []}));
-ipcMain.handle('get-media-sources', async () => ({success:true,sources:[
-  {id:'hongguo',label:'红果'},{id:'xifan',label:'西饭'},{id:'hema',label:'河马'},
-  ...(getCurrentSettings().custom_sources || []).filter(source => source.enabled).map(source => ({id:`custom:${source.id}`,label:source.name,custom:true})),
-]}));
+ipcMain.handle('get-media-sources', async () => ({ success: true, sources: require('./src/native/media-sources').getMediaSources(getCurrentSettings()) }));
+ipcMain.handle('set-builtin-source-enabled', async (_event, id, enabled) => {
+  try {
+    store.saveSettings(require('./src/native/media-sources').setBuiltinSourceEnabled(getCurrentSettings(), id, enabled));
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send('media-sources-changed');
+    }
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
 ipcMain.handle('save-custom-source', async (_event,draft) => {
   try {
     const source = require('./src/native/custom-source').validateSource(draft);
@@ -1455,6 +1461,7 @@ ipcMain.handle('test-custom-source', async (_event,draft) => {
 
 
 ipcMain.handle('browse-list', async (_event, options) => {
+  if (['xifan', 'hema'].includes(options?.source) && getCurrentSettings().builtin_sources?.[options.source] === false) return { success: false, results: [], error: '此来源已关闭，可在设置中重新开启' };
   if (proxyStartupFallback) return { success: false, error: '网络代理配置无效，请先在设置中修复或明确关闭代理。' };
   if ((!options?.source || options.source === 'hongguo') && options?.catalogChannel != null
     && !['app', 'web'].includes(options.catalogChannel)) return { success: false, error: '不支持的红果目录线路' };
@@ -1736,6 +1743,7 @@ async function searchAtSourcePage(keyword, options = {}) {
 
 ipcMain.handle('search-series', async (event, keyword, options = {}) => {
   try {
+    if (['xifan', 'hema'].includes(options?.source) && getCurrentSettings().builtin_sources?.[options.source] === false) throw new Error('此来源已关闭，可在设置中重新开启');
     const deadline = Date.now() + 20000;
     return await seriesSearch.searchSeries(keyword, (kw, call) => searchAtSource(kw, { ...options, deadline, ...(call || {}) }), [], { deadline });
   } catch (error) {
@@ -1746,6 +1754,7 @@ ipcMain.handle('search-series', async (event, keyword, options = {}) => {
 
 ipcMain.handle('search-series-more', async (event, keyword, options = {}) => {
   try {
+    if (['xifan', 'hema'].includes(options?.source) && getCurrentSettings().builtin_sources?.[options.source] === false) throw new Error('此来源已关闭，可在设置中重新开启');
     if (!Number.isSafeInteger(options?.page) || options.page < 2 || options.page > 50) throw new Error('加载更多页码必须是 2 至 50 的整数');
     const deadline = Date.now() + 12000;
     return await searchAtSource(keyword, { ...options, deadline, fuzzy: false });

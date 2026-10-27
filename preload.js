@@ -92,6 +92,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteCustomSource: id => ipcRenderer.invoke('delete-custom-source',id),
   testCustomSource: draft => ipcRenderer.invoke('test-custom-source',draft),
   getMediaSources: () => ipcRenderer.invoke('get-media-sources'),
+  setBuiltinSourceEnabled: (id, enabled) => ipcRenderer.invoke('set-builtin-source-enabled', id, enabled),
+  onMediaSourcesChanged: cb => {
+    const listener = () => cb();
+    ipcRenderer.on('media-sources-changed', listener);
+    return () => ipcRenderer.removeListener('media-sources-changed', listener);
+  },
   browseCategories: () => ipcRenderer.invoke('browse-categories'),
   browseList: (options) => ipcRenderer.invoke('browse-list', options),
   playSeries: (payload) => ipcRenderer.invoke('play-series', payload),
