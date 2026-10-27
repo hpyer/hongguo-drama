@@ -727,12 +727,19 @@ const SOURCE_RETRY_DELAYS = [3, 8, 15].map(minutes => minutes * 60000);
 const TRANSFER_RETRY_DELAYS = [10, 30, 60].map(seconds => seconds * 1000);
 const sourceRetryTimers = new Map();
 
+function sourceFailureIsTransient(error) {
+  const sources = Array.isArray(error?.sources) ? error.sources : [];
+  return sources.some(item =>
+    (item.source === 'web' && /^HTTP_(?:404|410)$/.test(item.code))
+    || /^(?:TIMEOUT|NETWORK_ERROR|HTTP_(?:408|5\d\d))$/.test(item.code));
+}
+
 function isDeferrableSourceError(task, error) {
   if (!/^\d{1,30}$/.test(String(task.hongguoInfo?.vid || ''))) return false;
+  if (error?.code === 'EMPTY_RESPONSE') return false;
   if (error?.code === 'SOURCE_UNAVAILABLE') {
     const sources = Array.isArray(error.sources) ? error.sources : [];
-    return !sources.some(item => item.code === 'SECURITY_BLOCKED') && sources.some(item =>
-      item.source === 'web' || /^(?:TIMEOUT|NETWORK_ERROR|HTTP_(?:408|5\d\d))$/.test(item.code));
+    return !sources.some(item => item.code === 'SECURITY_BLOCKED') && sourceFailureIsTransient(error);
   }
   if (error?.mediaStatus === 408 || error?.mediaStatus >= 500 && error?.mediaStatus <= 599) return true;
   if (['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'ERR_BAD_RESPONSE', 'ERR_STREAM_PREMATURE_CLOSE', 'EAI_AGAIN',
@@ -866,7 +873,50 @@ async function executeDownload(task) {
 }
 
 // ===== 红果短剧下载 =====
-async function verifyDownloadQuality(file, quality, existing = false) {
+function verifyDownloadDecode(file, cancelToken = null) {
+  const ffmpeg = resolveFfmpeg('ffmpeg');
+  if (!ffmpeg) return Promise.reject(Object.assign(new Error('视频解码校验工具不可用，请修复安装后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR' }));
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    let settled = false, child;
+    const abort = () => {
+      if (settled) return;
+      try { child?.kill(); } catch (_) {}
+      finish(reject, Object.assign(new Error('已取消视频解码校验'), { code: 'ERR_CANCELED' }));
+    };
+    const cleanup = () => cancelToken?.unsubscribe?.(abort);
+    const finish = (settle, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      settle(value);
+    };
+    if (cancelToken?.reason) {
+      finish(reject, Object.assign(new Error('已取消视频解码校验'), { code: 'ERR_CANCELED' }));
+      return;
+    }
+    cancelToken?.subscribe?.(abort);
+    child = execFile(ffmpeg, ['-v', 'error', '-xerror', '-nostdin', '-i', file, '-t', '3', '-f', 'null', '-'],
+      { timeout: 30000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) {
+          const code = String(error.code || '');
+          if (error.killed || error.signal || code === 'ETIMEDOUT' || code === 'ABORT_ERR') {
+            return finish(reject, Object.assign(new Error('视频解码校验工具超时或无法运行'), { code: 'LOCAL_MEDIA_TOOL_ERROR', cause: error }));
+          }
+          if (['ENOENT', 'EACCES', 'EPERM', 'EINVAL'].includes(code)) {
+            return finish(reject, Object.assign(new Error('视频解码校验工具不可用，请修复安装后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR', cause: error }));
+          }
+          return finish(reject, Object.assign(new Error('视频解码校验失败，文件可能损坏，请重新下载'), { code: 'MEDIA_DECODE_ERROR', cause: error }));
+        }
+        if (String(stderr || '').trim()) {
+          return finish(reject, Object.assign(new Error('视频解码校验失败，文件可能损坏，请重新下载'), { code: 'MEDIA_DECODE_ERROR' }));
+        }
+        finish(resolve);
+      });
+  });
+}
+
+async function verifyDownloadQuality(file, quality, existing = false, verifyDecode = false, cancelToken = null) {
   quality = normalizeDownloadQuality(quality);
   const ffprobe = resolveFfmpeg('ffprobe');
   if (!ffprobe) throw Object.assign(new Error('视频检查工具不可用，请修复安装后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR' });
@@ -878,6 +928,7 @@ async function verifyDownloadQuality(file, quality, existing = false) {
   if (!meetsDownloadQuality({ width: info.w, height: info.h }, quality)) {
     throw new Error(`${prefix}实际为 ${Math.min(info.w, info.h)}P（${info.w}×${info.h}），不满足 ${quality.toUpperCase()}${existing ? '；文件已保留，如需重新下载请先自行移除本地文件' : '，未自动降级'}`);
   }
+  if (verifyDecode) await verifyDownloadDecode(file, cancelToken);
   return `${Math.min(info.w, info.h)}p`;
 }
 
@@ -909,7 +960,7 @@ async function executeHongguoDownload(task) {
       sendToRenderer('download-progress', { id, qualityNotice: notice });
     };
     const verifyReceived = async file => {
-      const actual = await verifyDownloadQuality(file, allowLowerQuality ? 'auto' : quality);
+      const actual = await verifyDownloadQuality(file, allowLowerQuality ? 'auto' : quality, false, true, source.token);
       notifyQuality(Number.parseInt(actual, 10));
       return actual;
     };
@@ -945,7 +996,7 @@ async function executeHongguoDownload(task) {
         finally { cached.disk.readers--; disposeOnlineDisk(cached); }
       } else await fsp.writeFile(tmpPath, cached.buffer, { mode: 0o600 });
       source.token.throwIfRequested();
-      try { task.actualQuality = await verifyDownloadQuality(tmpPath, quality); reusedCache = true; }
+      try { task.actualQuality = await verifyDownloadQuality(tmpPath, quality, false, true, source.token); reusedCache = true; }
       catch (_) { fs.unlinkSync(tmpPath); }
       source.token.throwIfRequested();
       checkCustomAccess(vid);
@@ -1432,6 +1483,8 @@ function relaxedHongguoQueries(keyword) {
 
 let appSearchCooldownUntil = 0;
 const APP_SEARCH_COOLDOWN_MS = 2 * 60 * 1000;
+let newReleaseCooldownUntil = 0;
+const NEW_RELEASE_COOLDOWN_MS = 30 * 1000;
 let proxyStartupFallback = false;
 
 /**
@@ -1443,14 +1496,26 @@ async function searchNewReleasesForSearch(keyword, options = {}) {
   // 单字/纯标点搜索无法在上新列表里做有效标题匹配，也不值得为它多打两次 App 接口。
   const normalized = String(keyword || '').normalize('NFKC').replace(/[\s\p{P}\p{S}]+/gu, '');
   if (normalized.length < 2) return { results: [], checked: false, error: '' };
+  if (Date.now() < newReleaseCooldownUntil) {
+    return { results: [], partial: false, checked: false, error: 'App 上新补搜暂时不可用，请稍后重试' };
+  }
   const budget = Number(deadline) || 0;
   if (!budget || budget - Date.now() < 900) return { results: [], checked: false, error: '' };
   try {
-    const results = await require('./src/native/hongguo-app-new').searchNewReleases(keyword, {
+    const module = require('./src/native/hongguo-app-new');
+    const detailed = await module.searchNewReleasesDetailed(keyword, {
       deadline: Math.min(budget, Date.now() + 8000),
     });
-    return { results: Array.isArray(results) ? results : [], checked: true, error: '' };
+    if (detailed?.partial && !detailed?.results?.length) newReleaseCooldownUntil = Date.now() + NEW_RELEASE_COOLDOWN_MS;
+    else newReleaseCooldownUntil = 0;
+    return {
+      results: Array.isArray(detailed?.results) ? detailed.results : [],
+      partial: detailed?.partial === true,
+      checked: true,
+      error: detailed?.partial ? 'App 上新目录只读取到部分分类' : '',
+    };
   } catch (error) {
+    newReleaseCooldownUntil = Date.now() + NEW_RELEASE_COOLDOWN_MS;
     console.warn('[Search] App 上新补搜失败:', error?.message || error);
     return { results: [], checked: true, error: error?.message || 'App 上新补搜失败' };
   }
@@ -1491,9 +1556,14 @@ async function searchAtSourcePage(keyword, options = {}) {
   if (options?.source === 'hema') return require('./src/native/hema').search(keyword, options.page, { deadline });
   if (options?.source === 'xifan') return require('./src/native/xifan').search(keyword, options.page, { deadline });
   if (options?.source && options.source !== 'hongguo') throw new Error('不支持的搜索来源');
-  const requestOptions = deadline ? { deadline } : undefined;
   const page = options.page;
   const searchQuery = normalizeSearchTitle(keyword);
+  const reserveNewRelease = page === 1 && options?.fuzzy !== false && searchQuery.length >= 2;
+  const officialDeadline = reserveNewRelease && deadline
+    ? Math.min(deadline, Date.now() + 12000)
+    : deadline;
+  const requestOptions = deadline ? { deadline } : undefined;
+  const officialRequestOptions = officialDeadline ? { deadline: officialDeadline } : undefined;
   const hasTitleMatch = items => !!searchQuery && items.some(item => normalizeSearchTitle(item.series_title).includes(searchQuery));
   const hasExactTitleMatch = items => !!searchQuery && items.some(item => normalizeSearchTitle(item.series_title) === searchQuery);
   // 第 2 页起必须固定第一页选中的通道，不能中途换源造成重复/漏结果。
@@ -1536,7 +1606,7 @@ async function searchAtSourcePage(keyword, options = {}) {
   // 官网搜索页的结果由前端请求 /api/search/result 后渲染；直接调用接口
   // 避免一次页面加载失败就空等到 15 秒。接口结构变化时才退回页面嗅探。
   try {
-    const response = await searchHongguo(keyword, requestOptions);
+    const response = await searchHongguo(keyword, officialRequestOptions);
     let results = response.results;
     const attempted = [], fuzzyErrors = [];
     if (options?.fuzzy !== false && !hasTitleMatch(results)) {
@@ -1545,7 +1615,7 @@ async function searchAtSourcePage(keyword, options = {}) {
       for (const relaxed of relaxedHongguoQueries(keyword)) {
         if (deadline && Date.now() >= deadline) { fuzzyErrors.push('搜索时间预算已用完'); break; }
         try {
-          const extra = await searchHongguo(relaxed, requestOptions);
+          const extra = await searchHongguo(relaxed, officialRequestOptions);
           const merged = new Map(results.map(item => [String(item.series_id), item]));
           for (const item of extra.results) {
             const id = String(item.series_id);
@@ -1562,11 +1632,18 @@ async function searchAtSourcePage(keyword, options = {}) {
     }
     // 官网没有标题匹配（常见于当天刚上线、搜索索引未同步），用 App 上新列表补搜。
     // 短剧名还要排除“老剧名包含新剧名”的遮蔽，例如搜「接班」只返回《接班人的考题》。
-    const needsNewRelease = searchQuery.length >= 2
-      && (!hasTitleMatch(results) || (searchQuery.length <= 4 && !hasExactTitleMatch(results)));
+    // Any non-exact result can be an older title that merely contains the query.
+    // For longer titles, a "contains" match previously suppressed the new-release
+    // lookup even when the exact new drama existed.
+    const needsNewRelease = searchQuery.length >= 2 && !hasExactTitleMatch(results);
     let newRelease = { results: [], checked: false, error: '' };
     if (options?.fuzzy !== false && needsNewRelease) {
-      newRelease = await searchNewReleasesForSearch(keyword, { deadline });
+      // When the website already has usable results, give the App supplement a
+      // short additive budget instead of blocking the whole search for 8 seconds.
+      const supplementDeadline = results.length
+        ? Math.min(deadline || Date.now() + 2500, Date.now() + 2500)
+        : deadline;
+      newRelease = await searchNewReleasesForSearch(keyword, { deadline: supplementDeadline });
       if (newRelease.results.length) results = mergeNewReleases(results, newRelease.results);
     }
     const relaxedQuery = attempted.join('、');
@@ -1579,15 +1656,24 @@ async function searchAtSourcePage(keyword, options = {}) {
       relaxedQuery,
       newRelease: newRelease.results.length,
       newReleaseChecked: newRelease.checked,
+      newReleasePartial: newRelease.partial === true,
       ...(newRelease.error ? { newReleaseError: newRelease.error } : {}),
     };
     const webMeta = { ...meta, channel: 'web', cursor: { page: response.page, nextPage: response.nextPage || null }, hasMore: !!response.hasMore };
-    if (fuzzyErrors.length && !results.length) {
+    const supplementalErrors = [
+      ...fuzzyErrors,
+      ...(newRelease.error || (newRelease.checked && newRelease.partial)
+        ? [newRelease.error || 'App 上新目录只读取到部分分类'] : []),
+    ];
+    if (supplementalErrors.length && !results.length) {
       // 原词和补搜都没有结果，不能把服务错误说成“没有找到”。
-      return { success: false, results: [], via: 'api', channel: 'web', error: `搜索失败：${[...new Set(fuzzyErrors)].join('；')}`, meta: webMeta, appError: appFallbackError };
+      return { success: false, results: [], via: 'api', channel: 'web', partial: true,
+        error: `搜索未完成：${[...new Set(supplementalErrors)].join('；')}`, meta: webMeta, appError: appFallbackError };
     }
-    if (fuzzyErrors.length) {
-      return { success: true, results, pageTitle: '', via: 'api', channel: 'web', partial: true, error: `模糊补搜未完成：${[...new Set(fuzzyErrors)].join('；')}`, meta: webMeta, hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
+    if (supplementalErrors.length) {
+      return { success: true, results, pageTitle: '', via: 'api', channel: 'web', partial: true,
+        error: `补充搜索未完成：${[...new Set(supplementalErrors)].join('；')}`, meta: webMeta,
+        hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
     }
     return { success: true, results, pageTitle: '', via: 'api', channel: 'web', meta: webMeta, hasMore: !!response.hasMore, cursor: { page: response.page, nextPage: response.nextPage || null }, appError: appFallbackError };
   } catch (error) {
@@ -1596,12 +1682,22 @@ async function searchAtSourcePage(keyword, options = {}) {
     // 接口 5xx/结构变化时 App 上新列表仍可能可用，能补到当天新剧就不必只报错或空等页面嗅探。
     if (page === 1 && options?.fuzzy !== false && searchQuery.length >= 2) {
       const newRelease = await searchNewReleasesForSearch(keyword, { deadline });
+      const newReleaseIssue = newRelease.error || (newRelease.partial ? 'App 上新目录只读取到部分分类' : '');
       if (newRelease.results.length) {
         return { success: true, results: newRelease.results, pageTitle: '', via: 'app-new', channel: 'app-new', page: 1,
           total: newRelease.results.length, totalPages: 0, hasMore: false, nextPage: null, cursor: null, partial: true,
-          error: `官网搜索未完成：${message}；已显示 App 上新补搜结果`,
+          error: `官网搜索未完成：${message}；已显示 App 上新补搜结果${newReleaseIssue ? `；App 上新补搜未完成：${newReleaseIssue}` : ''}`,
           meta: { total: newRelease.results.length, page: 1, totalPages: 0, hasMore: false, relaxed: false,
-            newRelease: newRelease.results.length, newReleaseChecked: true },
+            newRelease: newRelease.results.length, newReleaseChecked: true, newReleasePartial: newRelease.partial === true,
+            ...(newReleaseIssue ? { newReleaseError: newReleaseIssue } : {}) },
+          apiError: message, appError: appFallbackError };
+      }
+      if (newRelease.checked && newReleaseIssue) {
+        return { success: false, results: [], via: 'app-new', channel: 'app-new', page: 1, partial: true,
+          error: `官网搜索未完成：${message}；App 上新补搜未完成：${newReleaseIssue}`,
+          meta: { total: 0, page: 1, totalPages: 0, hasMore: false, relaxed: false,
+            newRelease: 0, newReleaseChecked: true, newReleasePartial: newRelease.partial === true,
+            newReleaseError: newReleaseIssue },
           apiError: message, appError: appFallbackError };
       }
     }
@@ -2489,10 +2585,12 @@ async function withMediaRecovery(vid, seriesId, options, consume) {
     options.cancelToken?.throwIfRequested();
     if (options.signal?.aborted || controller.signal.aborted) throw Object.assign(new Error('已取消媒体请求'), { code: 'ERR_CANCELED' });
   };
-  const recoverable = error => error?.mediaRetryable || error?.code === 'SOURCE_UNAVAILABLE'
-    || ['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'ERR_BAD_RESPONSE', 'ERR_STREAM_PREMATURE_CLOSE', 'EAI_AGAIN'].includes(error?.code);
+  const recoverable = error => error?.code === 'SOURCE_UNAVAILABLE'
+    ? sourceFailureIsTransient(error)
+    : error?.mediaRetryable || error?.code === 'MEDIA_DECODE_ERROR'
+      || ['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'ERR_BAD_RESPONSE', 'ERR_STREAM_PREMATURE_CLOSE', 'EAI_AGAIN'].includes(error?.code);
   const rounds = options.recover !== false && /^\d{1,30}$/.test(String(vid)) ? 3 : 1;
-  let lastError, transfers = 0;
+  let lastError, decodeFailure, transfers = 0;
   try {
     for (let round = 0; round < rounds; round++) {
       cancelled();
@@ -2536,10 +2634,13 @@ async function withMediaRecovery(vid, seriesId, options, consume) {
             || /^(?:EACCES|EPERM|ENOSPC|EDQUOT|EROFS|EIO|ENOENT|EEXIST|ENOTDIR|EISDIR|EMFILE|ENFILE|EBUSY|ENAMETOOLONG|EMLINK|EFBIG|LOCAL_MEDIA_TOOL_ERROR|SECURITY_BLOCKED|ERR_WEB_MEDIA_ADDRESS)$/.test(error?.code);
           if (options.allowLowerQuality && terminal || (!recoverable(error) && !options.allowLowerQuality)) throw error;
           lastError = error;
+          // A bad Web body changes source priority; retry lookup before giving up on App recovery.
+          if (error?.code === 'MEDIA_DECODE_ERROR' && candidate.source !== 'web') decodeFailure = error;
           hongguo.markWebMediaFailure?.(candidate);
           if (transfers >= 4 && !options.allowLowerQuality) throw lastError;
         }
       }
+      if (decodeFailure) throw decodeFailure;
     }
     throw lastError;
   } finally {

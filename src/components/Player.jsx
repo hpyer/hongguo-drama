@@ -176,6 +176,20 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     for (const request of requests) releasePrefetchRequest(request);
   }, [releasePrefetchRequest]);
 
+  const prunePrefetchAfter = useCallback((seriesId, vidIndex, quality, consumed = null) => {
+    const kept = [];
+    for (const request of prefetchRef.current) {
+      if (request === consumed) continue;
+      if (request.seriesId !== seriesId || request.quality !== quality
+        || Number(request.vidIndex) <= Number(vidIndex)) {
+        releasePrefetchRequest(request);
+      } else {
+        kept.push(request);
+      }
+    }
+    prefetchRef.current = kept;
+  }, [releasePrefetchRequest]);
+
   const cancelCompat = useCallback(() => {
     const request = compatRequestRef.current;
     compatRequestRef.current = null;
@@ -717,16 +731,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       } else {
         // 跳到更远的集数时，目标集之前或不同清晰度的旧预取立即释放；
         // 目标集之后且同剧同清晰度的预取继续保留，切过去后可直接复用。
-        const kept = [];
-        for (const item of prefetchRef.current) {
-          if (item === prefetched) continue;
-          if (item.seriesId !== activeSeriesId || item.quality !== quality || Number(item.vidIndex) <= Number(vidIndex)) {
-            releasePrefetchRequest(item);
-          } else {
-            kept.push(item);
-          }
-        }
-        prefetchRef.current = kept;
+        prunePrefetchAfter(activeSeriesId, vidIndex, quality, prefetched);
       }
       resetPlayback(autoplay, force === false);
       setCompatMap(prev => { const next = { ...prev }; delete next[vidIndex]; return next; });
@@ -735,20 +740,26 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       pendingSeekRef.current = seekTo;
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
-      setOnlineProgress({ vid: ep.vid, percent: 0, phase: 'preparing' });
+      const prefetchedReady = prefetched?.ready === true;
+      let usedPrefetch = !!prefetched;
+      setOnlineProgress(prefetchedReady ? null : { vid: ep.vid, percent: 0, phase: 'preparing' });
       setOnlineVid(ep.vid);
       setOnlineUrl('');
       try {
         let res = prefetched ? await prefetched.promise : null;
         if (onlineRequestRef.current !== request) return;
-        if (!res?.success) res = await window.electronAPI.prepareOnlinePlay({
-          requestId: request.requestId,
-          vid: ep.vid,
-          seriesId: activeSeriesId,
-          vidIndex,
-          quality,
-          force,
-        });
+        if (!res?.success) {
+          usedPrefetch = false;
+          setOnlineProgress({ vid: ep.vid, percent: 0, phase: 'preparing' });
+          res = await window.electronAPI.prepareOnlinePlay({
+            requestId: request.requestId,
+            vid: ep.vid,
+            seriesId: activeSeriesId,
+            vidIndex,
+            quality,
+            force,
+          });
+        }
         if (onlineRequestRef.current !== request) {
           window.electronAPI.releaseOnlinePlay({ requestId: request.requestId, streamId: res?.streamId }).catch(() => {});
           return;
@@ -760,7 +771,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         }
         request.streamId = res.streamId;
         request.prepared = true;
-        setMediaBuffering(true);
+        if (!usedPrefetch && !res.cached) setMediaBuffering(true);
         setOnlineUrl(res.url);
         setOnlineProgress(null);
         // Playback cache changes do not need a synchronous scan of all download directories.
@@ -770,7 +781,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         await recoverOnlineFailure(ep, '在线播放失败: ' + e.message);
       }
     },
-    [episodes, activeSeriesId, showToast, refreshOnlineCacheInfo, resetPlayback, releaseOnline, currentPosition, recoverOnlineFailure]
+    [episodes, activeSeriesId, showToast, refreshOnlineCacheInfo, resetPlayback, releaseOnline, currentPosition, recoverOnlineFailure, prunePrefetchAfter]
   );
 
   function reconnectOnce() {
@@ -796,12 +807,13 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       }
       onlineSourceRef.current = null;
       const seekTo = resumeAt ?? (vidIndex === stateRef.current.currentIndex ? currentPosition() : 0);
-      resetPlayback();
+      resetPlayback(true, true);
+      prunePrefetchAfter(activeSeriesId, vidIndex, onlineQuality);
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
       pendingSeekRef.current = seekTo;
     },
-    [episodes, activeSeriesId, resetPlayback, startOnlinePlay, currentPosition, usableLocal]
+    [episodes, activeSeriesId, resetPlayback, startOnlinePlay, currentPosition, usableLocal, prunePrefetchAfter, onlineQuality]
   );
 
   const retryPlayback = async () => {
@@ -882,11 +894,12 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       const failedAt = prefetchFailureRef.current.get(key);
       if (failedAt && Date.now() - failedAt < PREFETCH_RETRY_MS) continue;
       const request = { requestId: crypto.randomUUID(), vid: episode.vid, seriesId: activeSeriesId,
-        vidIndex: episode.vid_index, quality: onlineQuality };
+        vidIndex: episode.vid_index, quality: onlineQuality, ready: false };
       prefetchRef.current = [...prefetchRef.current, request];
       request.promise = window.electronAPI.prepareOnlinePlay({ ...request, prefetch: true })
         .catch(error => ({ success: false, error: error?.message || String(error) }))
         .then(result => {
+          request.ready = result?.success === true;
           if (prefetchRef.current.includes(request)) {
             if (result?.success) {
               prefetchFailureRef.current.delete(key);
@@ -968,7 +981,11 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     fallbackRef.current = null;
     setWaitingFor(null);
     setAutoAdvancing(false);
-    videoRef.current?.pause();
+    const video = videoRef.current;
+    if (video && document.pictureInPictureElement === video) {
+      document.exitPictureInPicture?.()?.catch?.(() => {});
+    }
+    video?.pause();
   }, [active, persistPosition]);
 
   const handleMetadata = (event) => {

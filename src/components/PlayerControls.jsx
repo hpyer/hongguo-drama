@@ -289,6 +289,10 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
         await document.exitPictureInPicture();
         return;
       }
+      if (document.querySelector?.('.stealth-mode')) {
+        onError?.('请先退出小窗模式，再开启画中画');
+        return;
+      }
       if (!document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== 'function') {
         onError?.('当前系统不支持画中画小窗');
         return;

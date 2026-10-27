@@ -46,6 +46,7 @@ function fixture(initialTasks) {
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   const run = text => vm.runInContext(text, context);
   run(`const originalPumpQueue = pumpQueue, originalRequestMedia = requestMedia; pumpQueue = () => {}; resolveFfmpeg = () => '/test/ffprobe';
+    verifyDownloadDecode = async () => {};
     probeVideoInfo = async () => ({ w: 1080, h: 1920, duration: 12, codec: 'h264' });
     requestMedia = async () => ({headers: {'content-length': '200000'}, data: testReadStream()});
     downloadTasks = [{ id: 't1', type: 'hongguo', status: 'pending', filename: 'ep13.mp4', downloadQuality: 'auto',

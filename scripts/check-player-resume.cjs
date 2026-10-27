@@ -11,7 +11,7 @@ const videoEnhancementStub = {
 const shortcutSource = transformSync(fs.readFileSync(path.join(__dirname, '../src/shortcuts.js'), 'utf8'), { loader: 'js', format: 'cjs' }).code;
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/Player.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
-function mount({ local = false, saved = null, transcode, prepare, props = {}, episodeCount = 2, storage = new Map(), seriesId = 'A', settings = {}, lockedIndexes = [], apiOverrides = {}, now = () => Date.now() } = {}) {
+function mount({ local = false, localIndexes = [], saved = null, transcode, prepare, props = {}, episodeCount = 2, storage = new Map(), seriesId = 'A', settings = {}, lockedIndexes = [], apiOverrides = {}, now = () => Date.now() } = {}) {
   // Playback fixtures model an explicit play command; target:null exercises passive library entry.
   props = { setEpisodesOpen() {}, ...((local || saved) ? { target: { seriesId, resume: true, ts: 1 } } : {}), ...props };
   const slots = [], effects = [], cleanups = [], saves = [], prepares = [], transcodes = [], cancelled = [];
@@ -19,7 +19,9 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   const events = new Map(), mediaEvents = new Map(), timers = new Map();
   const listenerOptions = new Map(), mediaCalls = { play: 0, pause: 0 };
   const documentEvents = new Map();
-  const document = { activeElement: null, querySelector: () => null, fullscreenElement: null,
+  let pipExits = 0;
+  const document = { activeElement: null, querySelector: () => null, fullscreenElement: null, pictureInPictureElement: null,
+    pictureInPictureEnabled: true, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; },
     addEventListener: (name, fn) => documentEvents.set(name, fn), removeEventListener: name => documentEvents.delete(name),
     exitFullscreen: async () => { document.fullscreenElement = null; documentEvents.get('fullscreenchange')?.(); } };
   const scrollArea = { scrollTop: 360 };
@@ -50,7 +52,11 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   };
   // useCallback returns the callback, unlike useMemo.
   react.useCallback = (fn, deps) => react.useMemo(() => fn, deps);
-  const episodes = Array.from({ length: episodeCount }, (_, i) => i + 1).map(n => ({ vid_index: n, vid: `v${n}`, locked: lockedIndexes.includes(n), status: local ? 'completed' : 'missing', ...(local ? { fileUrl: `file:///mock-${n}.mp4`, savePath: `/mock-${n}.mp4` } : {}) }));
+  const episodes = Array.from({ length: episodeCount }, (_, i) => i + 1).map(n => {
+    const isLocal = local || localIndexes.includes(n);
+    return { vid_index: n, vid: `v${n}`, locked: lockedIndexes.includes(n), status: isLocal ? 'completed' : 'missing',
+      ...(isLocal ? { fileUrl: `file:///mock-${n}.mp4`, savePath: `/mock-${n}.mp4` } : {}) };
+  });
   const api = {
     getSeriesList: async () => [{ series_id: seriesId }],
     getSeriesEpisodes: async () => ({ success: true, data: { series_id: seriesId, series_title: '测试剧', total: episodeCount, episodes } }),
@@ -113,6 +119,8 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
     flushBatched: async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); render(); },
     transcodeProgress: payload => transcodeProgress?.(payload),
     button: label => find(n => n.type === 'button' && text(n).includes(label)),
+    enterPictureInPicture: () => { document.pictureInPictureElement = media; },
+    pictureInPictureExits: () => pipExits,
     episode: n => find(x => x.props['aria-label'] === `第 ${n} 集`).props.onClick(),
     error: code => find(n => n.type === 'video').props.onError({ currentTarget: Object.assign(media, { error: { code } }) }),
     unmount: () => cleanups.forEach(fn => fn?.()) };
@@ -371,6 +379,16 @@ if (require.main === module) (async () => {
     finishNext({ success: true, url: 'hongguo-stream://two' }); await ui.flush();
     assert.equal(ui.find(n => n.type === 'video').props.key, first.props.key);
     assert.equal(ui.find(n => n.type === 'video').props.src, 'hongguo-stream://two'); ui.unmount();
+  });
+  await test('leaving the player page exits native picture-in-picture before pausing', async () => {
+    const ui = mount({ props: { active: true, target: { seriesId: 'A', vidIndex: 1, ts: 1 } } });
+    await ui.flush(); ui.metadata();
+    ui.enterPictureInPicture();
+    ui.props.active = false;
+    ui.render(); await ui.flush();
+    assert.equal(ui.pictureInPictureExits(), 1, 'leaving the player page must close the native PiP window');
+    assert.equal(ui.media.paused, true, 'the retained player must still pause after leaving');
+    ui.unmount();
   });
   process.exitCode = failures ? 1 : 0;
 })();

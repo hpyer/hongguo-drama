@@ -27,6 +27,7 @@ function load(fetchPlayUrlSingle, overrides = {}) {
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   // These transport/decryption fixtures are synthetic; real media validity is checked separately.
   context.probeVideoInfo = async () => ({ w: 1080, h: 1920, duration: 12, codec: 'h264' });
+  context.verifyDownloadDecode = async () => {};
   context.resolveFfmpeg = () => '/fixture/ffprobe';
   context.registerStreamProtocol();
   context.registerLocalProtocol();
@@ -73,10 +74,15 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     const h=harness(async()=>{ lookups++; return first; }); const t=task('backup');
     await h.context.executeHongguoDownload(t); assert.equal(t.status,'completed',t.error); assert.equal(lookups,1);
   });
-  await check('empty source is refreshed during playback preparation',async()=>{
-    let lookups=0; const h=harness(async()=>++lookups===1?{url:null,code:'SOURCE_UNAVAILABLE',error:'temporary'}:info('/ok'));
+  await check('transient network source is refreshed during playback preparation',async()=>{
+    let lookups=0; const h=harness(async()=>++lookups===1?{url:null,code:'SOURCE_UNAVAILABLE',sources:[{source:'app',code:'NETWORK_ERROR'}],error:'temporary'}:info('/ok'));
     const p=await h.handlers['prepare-online-play']({}, {vid:'11',seriesId:'1'});
     assert.equal(p.success,true,p.error); assert.equal(lookups,2);
+  });
+  await check('empty source stops playback preparation without another lookup',async()=>{
+    let lookups=0; const h=harness(async()=>{lookups++;return {url:null,code:'SOURCE_UNAVAILABLE',sources:[{source:'app',code:'EMPTY_RESPONSE'}],error:'empty response'};});
+    const p=await h.handlers['prepare-online-play']({}, {vid:'11',seriesId:'1'});
+    assert.equal(p.success,false); assert.match(p.error,/empty response/); assert.equal(lookups,1);
   });
   await check('stream recovers before headers and preserves requested Range',async()=>{
     let lookups=0; const h=harness(async()=>++lookups===1?info('/missing','web'):info('/ok'));

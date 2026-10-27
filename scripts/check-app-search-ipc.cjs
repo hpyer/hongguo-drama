@@ -11,7 +11,7 @@ const source = path.resolve(__dirname, '../main.js'), req = createRequire(source
 const unexpectedSearch = async () => { throw new Error('Unexpected search provider call'); };
 
 function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = unexpectedSearch,
-  newReleaseSearch = async () => [], hemaSearch = unexpectedSearch, xifanSearch = unexpectedSearch,
+  newReleaseSearch = async () => [], newReleaseDetailed = null, hemaSearch = unexpectedSearch, xifanSearch = unexpectedSearch,
   customSearch = unexpectedSearch } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-app-search-'));
   const handlers = {}, app = new EventEmitter();
@@ -25,7 +25,13 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
     './src/store': { getSettings: () => ({ search_app_enabled: appEnabled }) },
     './src/native/hongguo-search': { searchHongguo: webSearch },
     './src/native/hongguo-app-search': { searchApp: appSearch },
-    './src/native/hongguo-app-new': { searchNewReleases: newReleaseSearch },
+    './src/native/hongguo-app-new': {
+      searchNewReleases: newReleaseSearch,
+      searchNewReleasesDetailed: newReleaseDetailed || (async (...args) => {
+        const results = await newReleaseSearch(...args);
+        return Array.isArray(results) ? { results, partial: false } : results;
+      }),
+    },
     './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
     './src/native/hema': { search: hemaSearch },
     './src/native/xifan': { search: xifanSearch },
@@ -99,6 +105,77 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
   }
 
   {
+    const started = Date.now();
+    let webDeadline = 0, newReleaseDeadline = 0;
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async (_keyword, options) => {
+        webDeadline = options.deadline;
+        return { results: [], total: 0, page: 1, totalPages: 1, hasMore: false };
+      },
+      newReleaseSearch: async (_keyword, options) => {
+        newReleaseDeadline = options.deadline;
+        return [];
+      },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '当天新剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.ok(webDeadline > started && webDeadline - started <= 12500,
+        'official search must stop before the full 20s search budget');
+      assert.ok(newReleaseDeadline - started >= 7000 && newReleaseDeadline - started <= 8500,
+        'new-release lookup must keep its own usable request budget');
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const started = Date.now();
+    let newReleaseDeadline = 0;
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6060001', series_title: '当天新剧加长版' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async (_keyword, options) => {
+        newReleaseDeadline = options.deadline;
+        return [];
+      },
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '当天新剧', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.ok(newReleaseDeadline - started <= 3000,
+        'a usable website result must not block on the full App supplement budget');
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [], total: 0, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseDetailed: async () => ({ results: [], partial: true }),
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '当天新剧', { source: 'hongguo' });
+      assert.equal(result.success, false, 'an incomplete new-release scan must not look like a confirmed empty result');
+      assert.equal(result.partial, true);
+      assert.match(result.error, /部分分类/);
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    let calls = 0;
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [], total: 0, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async () => { calls++; return []; },
+    });
+    try {
+      await fixture.handlers['search-series']({}, '没有结果一', { source: 'hongguo' });
+      await fixture.handlers['search-series']({}, '没有结果二', { source: 'hongguo' });
+      assert.equal(calls, 2, 'a complete empty scan must not trigger a false cooldown');
+    } finally { fixture.cleanup(); }
+  }
+
+  {
     const fixture = load({
       appEnabled: false,
       webSearch: async () => ({ results: [{ series_id: '6050001', series_title: '接班人的考题' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
@@ -109,6 +186,20 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
       assert.equal(result.success, true);
       assert.equal(result.meta.newRelease, 1, 'a longer old title must not hide the exact new short title');
       assert.ok(result.results.some(item => item.series_id === '6050002'));
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => ({ results: [{ series_id: '6051001', series_title: '接班人的考题特别篇' }], total: 1, page: 1, totalPages: 1, hasMore: false }),
+      newReleaseSearch: async () => [{ series_id: '6051002', series_title: '接班人的考题', new_release: true, released_today: true, source: 'hongguo' }],
+    });
+    try {
+      const result = await fixture.handlers['search-series']({}, '接班人的考题', { source: 'hongguo' });
+      assert.equal(result.success, true);
+      assert.equal(result.meta.newRelease, 1, 'a longer old title must not suppress new-release lookup for 5+ character titles');
+      assert.ok(result.results.some(item => item.series_id === '6051002'));
     } finally { fixture.cleanup(); }
   }
 

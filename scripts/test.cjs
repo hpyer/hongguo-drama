@@ -1,5 +1,5 @@
-// Hongguo Drama 3.7: platform-independent checks plus all native and renderer unit tests. Skips Windows installers,
-// real FFmpeg/media fixtures, and Electron GUI launches.
+// Unit and platform checks, including generated real-media decode/recovery fixtures (requires FFmpeg/libx264 and ffprobe).
+// Skips Windows installers, external media fixtures, architecture checks, and Electron GUI launches.
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');

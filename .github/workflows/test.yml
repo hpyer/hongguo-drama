@@ -16,4 +16,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Install real-media test tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: npm test

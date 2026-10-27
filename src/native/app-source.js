@@ -2,10 +2,11 @@
 // Signing and Spade algorithms adapted from woshishiq1/drpys
 // commit 22261adfa31435e3b3ef5a730b8a2a75bcaf1715, spider/js/红果果[短].js,
 // via N3urda/hongguoTV eea73e6a45569a2cbbb9440f7cd5290c459b0b70.
-// Changes: per-request synthetic IDs; no captured device identity; pure JS SM3;
+// Changes: registered in-memory playback identity; pure JS SM3;
 // bounded HTTPS transport; exact episode matching; supported codec selection.
 // Crypto tables and SDK protocol constants below are not user credentials.
 const crypto = require('node:crypto');
+const { getPlaybackDevice } = require('./playback-device');
 const sm3 = require('./sm3');
 const { normalizeDownloadQuality, meetsDownloadQuality } = require('./download-quality');
 const localId = () => String(1000000000000000n + BigInt('0x' + crypto.randomBytes(6).toString('hex')));
@@ -14,6 +15,7 @@ const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
 const SEARCH_API = 'https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v';
 const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
+const PLAYBACK_UA = 'com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)';
 const SEARCH_UA = 'com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)';
 const DEVICE = {
     ac: 'wifi', channel: 'update_64', aid: '8662', app_name: 'novelread',
@@ -126,20 +128,13 @@ function helios(khronos) {
 }
 
 function branchOf(url, body, khronos) { const bodyMd5 = body ? crypto.createHash('md5').update(body).digest() : Buffer.alloc(16); const q = sm3(url.split('?')[1]); const iv = getIv(getIv(getIv(0x20230928, q), bodyMd5), le32(khronos)); const low = iv & 15; return low - (((low * 171) >> 9) * 3); }
-function signedVideoRequest(payload) {
-    // Keep the request's synthetic identity consistent across URL and signature.
-    const device = { ...DEVICE, iid: localId(), device_id: localId() };
-    const khronos = Math.floor(Date.now() / 1000); const body = Buffer.from(payload); const ticketBase = Date.now(); let requestTicket = ticketBase; let query = ''; let url = '';
-    // branch 1 的签名变体服务端不认：抖动 _rticket 找一个可用的 branch（最多试 32 秒偏移）
-    for (let offset = 0; offset < 32; offset += 1) { requestTicket = ticketBase + offset; const values = { ...device, ts: String(khronos), _rticket: String(requestTicket) }; query = pythonUrlEncode(values); url = `${VIDEO_API}?${query}`; if (branchOf(url, body, khronos) !== 1) break; }
-    const random = Math.floor(Math.random() * 65536); const headers = {
-        'User-Agent': VIDEO_UA, Accept: 'application/json; charset=utf-8,application/x-protobuf', 'Content-Type': 'application/json; charset=UTF-8',
-        'x-xs-from-web': '0', 'x-ss-req-ticket': String(requestTicket), 'x-tt-request-tag': 't=0;n=0', 'sdk-version': '2', 'passport-sdk-version': '50561',
-        'x-vc-bdturing-sdk-version': '3.7.2.cn', 'x-ss-stub': md5(body), 'x-gorgon': xGorgon(query, body, khronos, random),
-        'x-khronos': String(khronos), 'x-ladon': be32(khronos).toString('base64'), 'x-argus': le32(khronos).toString('base64'),
-        'x-helios': helios(khronos), 'x-medusa': buildMedusa(url, body, khronos, device), 'x-tt-dt': '',
-    };
-    return { url, headers, body };
+function playbackRequest(payload, identity) {
+    // Registered identity alone is sufficient for this endpoint; keep search signing separate.
+    const query = pythonUrlEncode({ ...DEVICE, ...identity, _rticket: String(Date.now()) });
+    return { url: `${VIDEO_API}?${query}`, body: Buffer.from(payload), headers: {
+        'User-Agent': PLAYBACK_UA, Accept: 'application/json; charset=utf-8,application/x-protobuf',
+        'Content-Type': 'application/json; charset=UTF-8',
+    } };
 }
 function parseSearchInteger(value) {
     if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value.trim()))) return null;
@@ -288,7 +283,15 @@ async function requestJson(url, options, deadline, signal) {
             continue;
         }
         if (response.status !== 200) throw Object.assign(new Error(`App 片源请求失败（HTTP ${response.status}）`), { status: response.status });
-        const parsed = typeof response.data === 'string' ? jsonBody(response.data) : response.data;
+        const raw = typeof response.data === 'string' ? response.data : '';
+        if (!raw.trim()) {
+            throw Object.assign(new Error('App 接口返回空响应，可能是签名或设备鉴权问题'), {
+                code: 'EMPTY_RESPONSE',
+                status: response.status,
+                logid: response.headers?.['x-tt-logid'] || '',
+            });
+        }
+        const parsed = typeof response.data === 'string' ? jsonBody(raw) : response.data;
         if (!parsed || typeof parsed !== 'object') throw Object.assign(new Error('App 接口未返回有效数据'), { code: 'INVALID_RESPONSE' });
         return parsed;
     }
@@ -306,24 +309,28 @@ async function fetchAppPlayUrl(vid, options = {}) {
         biz_param: { detail_page_version: 0, device_level: 3, disable_digg_stat: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
         mixed_video_id_map: { '1004': [vid] },
     });
-    const signed = signedVideoRequest(payload);
+    const signed = playbackRequest(payload, await getPlaybackDevice(requestJson));
     const response = await requestJson(signed.url, { method: 'POST', headers: signed.headers, data: signed.body }, deadline, signal);
     if (Number(response.Code || response.code || 0) !== 0) throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
     const entry = response.data?.[vid];
     const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;
     if (!model) throw Object.assign(new Error('App 接口未返回所选分集，已停止取址'), { code: entry?.video_model ? 'INVALID_RESPONSE' : 'MISSING_MODEL' });
-    const fallback = parseFallback(model.fallback_api);
-    if (!fallback) throw Object.assign(new Error('App 接口未返回本集片源地址'), { code: 'MISSING_MODEL' });
-    const outer = await requestJson(fallback, { headers: { 'User-Agent': VIDEO_UA } }, deadline, signal);
-    if ([outer, outer.video_info].some(value => Number(value?.Code || value?.code || 0) !== 0)) {
-        throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
+    const inline = Array.isArray(model.video_list) && model.video_list.length > 0;
+    let info = model;
+    if (!inline) {
+        const fallback = parseFallback(model.fallback_api);
+        if (!fallback) throw Object.assign(new Error('App 接口未返回本集片源地址'), { code: 'MISSING_MODEL' });
+        const outer = await requestJson(fallback, { headers: { 'User-Agent': VIDEO_UA } }, deadline, signal);
+        if ([outer, outer.video_info].some(value => Number(value?.Code || value?.code || 0) !== 0)) {
+            throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
+        }
+        info = outer?.video_info?.data;
     }
-    const info = outer?.video_info?.data;
     if (!info) throw Object.assign(new Error('App 接口未返回本集片源模型'), { code: 'MISSING_MODEL' });
     const rows = Object.values(info?.video_list || {}).filter(item => item && (item.main_url || item.backup_url || Array.isArray(item.backup_url_list))).map(item => {
         const codec = str(item.codec_type || item.video_meta?.codec_type).toLowerCase();
         const codecRank = ['h264', 'avc', 'avc1'].includes(codec) ? 0 : ['hevc', 'h265', 'hvc1', 'hev1', 'bytevc1'].includes(codec) ? 1 : 2;
-        const quality = str(item.quality_desc || item.definition || item.height || item.vheight || item.video_meta?.definition);
+        const quality = str(item.quality_desc || item.definition || item.video_meta?.definition || item.height || item.vheight);
         const meta = item.video_meta || {};
         const [width, height] = [[item.vwidth, item.vheight], [item.width, item.height], [meta.vwidth, meta.vheight], [meta.width, meta.height]]
             .map(pair => pair.map(Number)).find(pair => pair.every(value => Number.isFinite(value) && value > 0)) || [0, 0];
@@ -342,9 +349,18 @@ async function fetchAppPlayUrl(vid, options = {}) {
     let lastError;
     const variants = [];
     const seen = new Set();
-    for (const selected of rows) {
+    // Auto means "best available". Keep every compatible encoding at the same
+    // resolution tier, but never silently fall through to a lower rendition.
+    const bestPixels = rows[0].pixels;
+    const selectedRows = requestedQuality === 'auto'
+        ? (bestPixels > 0 ? rows.filter(row => row.pixels === bestPixels) : rows.slice(0, 1))
+        : rows;
+    for (const selected of selectedRows) {
         try {
             const spade = selected.item.spade_a || selected.item.encrypt_info?.spade_a;
+            if (inline && !spade && ![false, 0, '0', 'false'].includes(selected.item.encrypt_info?.encrypt)) {
+                throw Object.assign(new Error('本集片源缺少有效解密信息'), { code: 'INVALID_RESPONSE' });
+            }
             const key = spade ? deriveContentKey(spade) : null;
             for (const candidate of [selected.item.main_url, selected.item.backup_url, ...(Array.isArray(selected.item.backup_url_list) ? selected.item.backup_url_list : [])]) {
                 if (typeof candidate !== 'string' || !candidate) continue;
@@ -358,7 +374,7 @@ async function fetchAppPlayUrl(vid, options = {}) {
                     if (seen.has(identity)) continue;
                     seen.add(identity);
                     variants.push({ url, contentKey, codec: selected.codec === 'bytevc1' ? 'hevc' : selected.codec, source: 'app', vid,
-                        userAgent: VIDEO_UA, quality: allowLowerQuality ? (selected.width && selected.height ? `${Math.min(selected.width, selected.height)}p` : '') : requestedQuality === 'auto' ? selected.quality : requestedQuality,
+                        userAgent: inline ? PLAYBACK_UA : VIDEO_UA, quality: allowLowerQuality ? (selected.width && selected.height ? `${Math.min(selected.width, selected.height)}p` : '') : requestedQuality === 'auto' ? selected.quality : requestedQuality,
                         ...(requestedQuality === 'auto' ? {} : { width: selected.width, height: selected.height }) });
                 } catch (error) { lastError = error; }
             }

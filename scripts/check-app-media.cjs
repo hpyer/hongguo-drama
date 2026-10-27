@@ -39,6 +39,7 @@ function load(url, mode = 'ok', key = contentKey) {
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   // These transport/decryption fixtures are synthetic; real media validity is checked separately.
   context.probeVideoInfo = async () => ({ w: 1080, h: 1920, duration: 12, codec: 'h264' });
+  context.verifyDownloadDecode = async () => {};
   context.resolveFfmpeg = () => '/fixture/ffprobe';
   context.resolveFfmpeg = () => '/bundled/ffmpeg'; context.registerStreamProtocol();
   return { dir, handlers, protocols, children, context };

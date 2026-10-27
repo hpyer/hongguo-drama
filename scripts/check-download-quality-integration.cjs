@@ -7,10 +7,11 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
 const { Readable } = require('node:stream');
+const { execFileSync } = require('node:child_process');
 const source = path.resolve(__dirname, '../main.js');
 const req = createRequire(source);
 const dirs = [];
-function fixture({ width = 1080, height = 1920, quality = 'auto' } = {}) {
+function fixture({ width = 1080, height = 1920, quality = 'auto', realMedia = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-quality-'));
   dirs.push(root);
   const handlers = {}, calls = [], events = [], app = new EventEmitter();
@@ -28,15 +29,82 @@ function fixture({ width = 1080, height = 1920, quality = 'auto' } = {}) {
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);
   const run = text => vm.runInContext(text, context);
-  run(`globalThis.originalProbeVideoInfo = probeVideoInfo; sendToRenderer = (channel, data) => testEvents.push({channel, data: {...data}}); pumpQueue = () => {}; resolveFfmpeg = () => '/test/ffprobe';
-    probeVideoInfo = async () => testDimensions;
+  run(`globalThis.originalProbeVideoInfo = probeVideoInfo; sendToRenderer = (channel, data) => testEvents.push({channel, data: {...data}}); pumpQueue = () => {};
     requestMedia = async () => ({headers: {'content-length': '200000'}, data: testReadStream()});
     seriesRegistry = [{series_id:'1',series_title:'测试剧',episodes:[{vid:'11',vid_index:1},{vid:'12',vid_index:2}]}];`);
+  // Synthetic transfers mock validation; realMedia keeps the production probe, decoder and tool discovery.
+  if (!realMedia) run(`resolveFfmpeg = () => '/test/ffprobe'; verifyDownloadDecode = async () => {};
+    probeVideoInfo = async () => testDimensions;`);
   return { root, context, run, handlers, calls, events, saved: () => saved,
     setQuality: value => { settings.download_quality = value; } };
 }
 const payload = quality => ({ seriesId: '1', seriesTitle: '测试剧', episodes: [{vid:'11',vid_index:1}], ...(quality ? {quality} : {}) });
 const checks = [
+  ['real decoder recovers corrupt Web through healthy App and rejects probeable corrupt App once', async () => {
+    const h = fixture({ realMedia: true });
+    const ffmpeg = h.context.resolveFfmpeg('ffmpeg');
+    assert.ok(ffmpeg && h.context.resolveFfmpeg('ffprobe'), 'local FFmpeg and ffprobe are required');
+    const valid = path.join(h.root, 'valid.mp4'), broken = path.join(h.root, 'broken.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-nostdin', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=24:d=1',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-qp', '0', '-pix_fmt', 'yuv420p', valid],
+      { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+    const bytes = fs.readFileSync(valid), damaged = Buffer.from(bytes);
+    const mdat = damaged.indexOf(Buffer.from('mdat'));
+    assert.ok(mdat >= 4, 'fixture must contain an MP4 media-data box');
+    const end = mdat - 4 + damaged.readUInt32BE(mdat - 4);
+    assert.ok(end > mdat + 4 && end <= damaged.length);
+    damaged.fill(0, mdat + 4, end);
+    fs.writeFileSync(broken, damaged);
+    assert.equal(await h.context.verifyDownloadQuality(broken, 'auto'), '360p', 'corruption must survive the real metadata probe');
+    const attempts = [];
+    h.context.localMedia = info => {
+      attempts.push(info.source);
+      const file = info.source === 'web' ? broken : valid;
+      return { headers: { 'content-length': String(fs.statSync(file).size) }, data: fs.createReadStream(file) };
+    };
+    h.context.sourceCalls = h.calls;
+    h.run(`globalThis.webFailed = false;
+      hongguo.markWebMediaFailure = info => { if (info.source === 'web') webFailed = true; };
+      hongguo.fetchPlayUrlSingle = async (...args) => {
+        sourceCalls.push(args);
+        const source = webFailed ? 'app' : 'web';
+        return { url: 'https://media.example/' + source, source, vid: '11' };
+      };
+      requestMedia = async info => localMedia(info);`);
+    await h.handlers['hongguo-download-batch']({}, payload());
+    await h.run('executeHongguoDownload(downloadTasks[0])');
+    const completed = h.saved()[0];
+    assert.equal(completed.status, 'completed', completed.error);
+    assert.deepEqual(attempts, ['web', 'app']);
+    assert.equal(h.calls.length, 2);
+    assert.ok(h.calls.every(call => call[2].quality === 'auto' && call[2].allowLowerQuality === false));
+    assert.equal(h.calls[1][2].force, true);
+    assert.deepEqual(fs.readFileSync(completed.savePath), bytes);
+    assert.equal(fs.existsSync(completed.savePath + '.enc.tmp'), false);
+    assert.equal(h.events.filter(event => event.channel === 'download-completed').length, 1);
+
+    const bad = fixture({ realMedia: true });
+    let appTransfers = 0;
+    bad.context.localMedia = () => {
+      appTransfers++;
+      return { headers: { 'content-length': String(damaged.length) }, data: fs.createReadStream(broken) };
+    };
+    bad.context.sourceCalls = bad.calls;
+    bad.run(`hongguo.fetchPlayUrlSingle = async (...args) => {
+        sourceCalls.push(args); return { url: 'https://media.example/broken-app', source: 'app', vid: '11' };
+      };
+      requestMedia = async () => localMedia();`);
+    await bad.handlers['hongguo-download-batch']({}, payload());
+    await bad.run('executeHongguoDownload(downloadTasks[0])');
+    const failed = bad.saved()[0];
+    assert.equal(failed.status, 'failed');
+    assert.match(failed.error, /解码校验失败/);
+    assert.equal(bad.calls.length, 1, 'decode failures must not repeatedly resolve the same bad App rendition');
+    assert.equal(appTransfers, 1);
+    assert.equal(fs.existsSync(failed.savePath), false);
+    assert.equal(fs.existsSync(failed.savePath + '.enc.tmp'), false);
+    assert.equal(bad.events.filter(event => event.channel === 'download-completed').length, 0);
+  }],
   ['batch snapshots chosen quality and passes it through to source lookup', async () => {
     const h = fixture({ quality: '720p' });
     assert.equal((await h.handlers['hongguo-download-batch']({}, payload('1080p'))).success, true);
@@ -97,7 +165,7 @@ const checks = [
     assert.equal(fs.existsSync(h.saved()[0].savePath),false);
   }],
   ['disk errors and cancellation never trigger a lower-quality download', async () => {
-    for(const code of ['ENOSPC','EACCES','ENOTDIR','EMFILE','EBUSY','SECURITY_BLOCKED','ERR_CANCELED']) {
+    for(const code of ['ENOSPC','EACCES','ENOTDIR','EMFILE','EBUSY','SECURITY_BLOCKED','LOCAL_MEDIA_TOOL_ERROR','ERR_CANCELED']) {
       const h = fixture();
       h.context.failureCode=code;
       h.run(`globalThis.attempts=0; hongguo.fetchPlayUrlSingle = async () => ({url:'https://media.example/high',variants:[{url:'https://media.example/low',width:480,height:854}]});

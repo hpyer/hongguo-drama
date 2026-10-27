@@ -3,9 +3,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const nativeDir = path.join(__dirname, '../src/native');
+const playbackDevice = Object.freeze({ device_id: '7000000000000000001', iid: '7000000000000000002', cdid: '00000000-0000-4000-8000-000000000003' });
 const mediaUrl = name => `https://v3-reading.qznovelvod.com/${name}.mp4`;
 const stream = (name, width, height, codec_type = 'h264') => ({ main_url: mediaUrl(name), width, height, codec_type, definition: '1080p' });
 function load(name, dependencies) {
+  dependencies = { './playback-device': { getPlaybackDevice: async () => playbackDevice }, ...dependencies };
   const context = { Buffer, URL, URLSearchParams, AbortSignal, process: { env: {} }, module: { exports: {} },
     require: name => Object.hasOwn(dependencies, name) ? dependencies[name] : require(name.startsWith('.') ? path.join(nativeDir, name) : name) };
   vm.runInNewContext(fs.readFileSync(path.join(nativeDir, name), 'utf8'), context);
@@ -15,9 +17,9 @@ function appFixture(videoList) {
   const calls = [];
   const app = load('app-source.js', { axios: async config => {
     calls.push(config);
-    return { status: 200, headers: {}, data: config.method === 'POST'
+    return { status: 200, headers: {}, data: JSON.stringify(config.method === 'POST'
       ? { data: { '11': { video_model: { fallback_api: 'https://vod.snssdk.com/info' } } } }
-      : { video_info: { data: { video_list: videoList } } } };
+      : { video_info: { data: { video_list: videoList } } }) };
   } });
   return { ...app, calls };
 }
@@ -88,7 +90,7 @@ const checks = [
         high: { ...stream('high', 1920, 1080), definition: '720p' },
       }).fetchAppPlayUrl('11');
       assert.equal(result.url, mediaUrl('high'));
-      assert.equal(result.variants[1].url, mediaUrl('low'), 'lower stream remains available for media recovery');
+      assert.deepEqual(Array.from(result.variants, item => item.url), [mediaUrl('high')], 'auto recovery must stay within the best tier');
     }
     const nested = await appFixture({
       low: { main_url: mediaUrl('low'), video_meta: { codec_type: 'h264', vwidth: 360, vheight: 640 } },

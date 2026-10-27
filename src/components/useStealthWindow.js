@@ -12,6 +12,7 @@ export default function useStealthWindow() {
     setStealthError('');
     try {
       if (enabled && document.fullscreenElement) await document.exitFullscreen();
+      if (enabled && document.pictureInPictureElement) await document.exitPictureInPicture?.();
       const result = await window.electronAPI.setStealthMode(enabled);
       if (!result?.success) throw new Error(result?.error || '小窗切换失败，请重试');
     } catch (error) { setStealthError(error.message); }

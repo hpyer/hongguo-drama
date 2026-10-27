@@ -16,6 +16,22 @@ const tick = (ui, time) => {
   ui.media.currentTime = time;
   ui.find(node => node.type === 'video').props.onTimeUpdate?.({ currentTarget: ui.media });
 };
+const paragraph = (ui, message) => ui.find(node => node.type === 'p'
+  && node.children?.join('') === message);
+const renderWithoutBuffering = ui => {
+  ui.render();
+  for (const message of ['正在加载视频…', '正在缓冲在线播放…']) {
+    assert.equal(paragraph(ui, message), undefined, `unexpected buffering overlay: ${message}`);
+  }
+};
+const flushWithoutBuffering = async ui => {
+  // Observe the synchronous handoff and every microtask render, matching the fixture's flush cadence.
+  renderWithoutBuffering(ui);
+  for (let i = 0; i < 30; i++) {
+    await Promise.resolve();
+    renderWithoutBuffering(ui);
+  }
+};
 
 (async () => {
   let failures = 0;
@@ -55,6 +71,76 @@ const tick = (ui, time) => {
         'the retained episode three preparation must not be duplicated');
       assert.ok(prefetches(ui).some(item => item.vidIndex === 4),
         'after switching, the queue must refill with the new next-next episode');
+    } finally { ui.unmount(); }
+  });
+
+  await test('switching to a completed prefetch has no buffering overlay in any observed render', async () => {
+    let finishPrefetch;
+    const ui = await openEpisode({
+      episodeCount: 2,
+      prepare: payload => payload.prefetch === true
+        ? new Promise(resolve => { finishPrefetch = resolve; })
+        : { success: true, url: 'hongguo-stream://first' },
+    });
+    try {
+      assert.equal(typeof finishPrefetch, 'function', 'the next episode must start prefetching before the switch');
+      finishPrefetch({ success: true, url: 'hongguo-stream://prefetched-second' });
+      await ui.flush();
+      ui.episode(2);
+      await flushWithoutBuffering(ui);
+      assert.equal(ui.find(node => node.type === 'video').props.src, 'hongguo-stream://prefetched-second');
+      assert.equal(paragraph(ui, '正在连接片源…'), undefined);
+      assert.equal(ui.prepares.filter(item => item.vidIndex === 2).length, 1, 'switching must reuse the completed prefetch');
+      ui.metadata();
+      await flushWithoutBuffering(ui);
+      assert.equal(ui.media.paused, false, 'the prefetched episode must start playing after metadata');
+    } finally { ui.unmount(); }
+  });
+
+  await test('switching to a still-preparing prefetch keeps the preparation state visible', async () => {
+    const pending = [];
+    const ui = await openEpisode({
+      episodeCount: 3,
+      prepare: payload => payload.prefetch === true
+        ? new Promise(resolve => { pending.push({ vidIndex: payload.vidIndex, resolve }); })
+        : { success: true, url: 'hongguo-stream://first' },
+    });
+    try {
+      ui.episode(2);
+      renderWithoutBuffering(ui);
+      assert.ok(paragraph(ui, '正在连接片源…'), 'the pending prefetch must show preparation immediately');
+      await flushWithoutBuffering(ui);
+      assert.ok(paragraph(ui, '正在连接片源…'), 'a pending prefetch must keep its preparation state visible');
+      const next = pending.find(item => item.vidIndex === 2);
+      assert.ok(next, 'the next episode must already be prefetching');
+      next.resolve({ success: true, url: 'hongguo-stream://prefetched-second' });
+      await flushWithoutBuffering(ui);
+      assert.equal(paragraph(ui, '正在连接片源…'), undefined);
+      assert.equal(ui.find(node => node.type === 'video').props.src, 'hongguo-stream://prefetched-second');
+      ui.metadata();
+      await flushWithoutBuffering(ui);
+      assert.equal(ui.media.paused, false);
+    } finally { ui.unmount(); }
+  });
+
+  await test('switching to a downloaded episode preserves prefetches after it', async () => {
+    const ui = await openEpisode({
+      episodeCount: 4,
+      localIndexes: [2],
+      prepare: payload => payload.prefetch === true ? new Promise(() => {}) : { success: true, url: 'hongguo-stream://first' },
+    });
+    try {
+      const queued = prefetches(ui).filter(item => item.vidIndex === 3 || item.vidIndex === 4);
+      assert.deepEqual(queued.map(item => item.vidIndex), [3, 4]);
+      ui.episode(2);
+      await ui.flush();
+      assert.equal(ui.releases.some(item => queued.some(request => request.requestId === item.requestId)), false,
+        'switching to a local episode must not release later prefetches');
+      ui.metadata();
+      ui.find(node => node.type === 'video').props.onPlaying?.({ currentTarget: ui.media });
+      await ui.flush();
+      assert.equal(prefetches(ui).filter(item => item.vidIndex === 3).length, 1);
+      assert.equal(prefetches(ui).filter(item => item.vidIndex === 4).length, 1);
     } finally { ui.unmount(); }
   });
 

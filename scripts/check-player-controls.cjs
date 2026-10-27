@@ -39,7 +39,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     play: async () => { plays++; media.paused = false; listeners.get('play')?.(); },
     pause: () => { pauses++; media.paused = true; listeners.get('pause')?.(); },
     addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const document = { activeElement: null, fullscreenElement: null, pictureInPictureElement: null, pictureInPictureEnabled: true, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); }, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; listeners.get('leavepictureinpicture')?.(); } };
+  const document = { activeElement: null, fullscreenElement: null, pictureInPictureElement: null, pictureInPictureEnabled: true, stealthMode: false, querySelector: selector => selector === '.stealth-mode' && document.stealthMode ? {} : null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); }, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; listeners.get('leavepictureinpicture')?.(); } };
   const stage = { addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
   const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; }, onError: message => { pipError = message; } };
   props.onWindowFill = value => { props.windowFill = value; };
@@ -72,6 +72,10 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   await find('退出画中画').props.onClick(); render();
   assert.equal(pipExits, 1, 'picture-in-picture control must close the native floating window');
   assert.equal(find('画中画').props['aria-pressed'], false);
+  document.stealthMode = true;
+  await find('画中画').props.onClick(); render();
+  assert.match(pipError, /请先退出小窗模式/);
+  document.stealthMode = false;
   const requestPictureInPicture = media.requestPictureInPicture;
   document.pictureInPictureEnabled = false;
   await find('画中画').props.onClick(); render();

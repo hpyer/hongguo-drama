@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const nativeDir = path.join(__dirname, '../src/native');
+const playbackDevice = Object.freeze({ device_id: '7000000000000000001', iid: '7000000000000000002', cdid: '00000000-0000-4000-8000-000000000003' });
 
 // Published SM3 vectors plus a long input cross-checked with Node 22/OpenSSL.
 const vectors = [
@@ -26,7 +27,6 @@ function encodedKey() {
 }
 function fixture({ wrongVid = false, fallback = 'https://vod.snssdk.com/info', media = 'https://v3-reading.qznovelvod.com/video.mp4', redirect = '', malformedKey = false, videoList = null, encrypted = true } = {}) {
   const calls = [];
-  const signedDeviceIds = [];
   const seed = Buffer.alloc(16, 7);
   const constants = Buffer.from('4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58', 'hex');
   const material = crypto.createHash('sha512').update(Buffer.concat([crypto.createHash('sha512').update(seed).digest(), constants])).digest();
@@ -37,9 +37,12 @@ function fixture({ wrongVid = false, fallback = 'https://vod.snssdk.com/info', m
     assert.equal(config.maxRedirects, 0);
     assert.ok(config.timeout > 0 && config.timeout <= 12000);
     assert.ok(config.signal);
+    assert.equal(config.responseType, 'text');
     if (config.method === 'POST') {
-      assert.ok(config.headers['x-medusa']);
-      assert.ok(config.headers['x-gorgon']);
+      assert.match(config.headers['User-Agent'], /^com\.phoenix\.read\/71532 /);
+      for (const header of Object.keys(config.headers)) {
+        assert.doesNotMatch(header.toLowerCase(), /^x-(?:medusa|gorgon|khronos|argus|ladon|helios|ss-stub)$/);
+      }
       const model = { video_model: JSON.stringify({ fallback_api: fallback }) };
       return { status: 200, headers: {}, data: JSON.stringify({ code: 0, data: { '999': model, ...(wrongVid ? {} : { '11': model }) } }) };
     }
@@ -49,9 +52,13 @@ function fixture({ wrongVid = false, fallback = 'https://vod.snssdk.com/info', m
       good: { main_url: encryptedUrl, codec_type: 'h264', quality_desc: '720P', spade_a: malformedKey ? 'bad' : encodedKey() },
     } } } }) };
   };
-  const context = { Buffer, URL, URLSearchParams, AbortSignal, signedDeviceIds, module: { exports: {} },
+  const context = { Buffer, URL, URLSearchParams, AbortSignal, module: { exports: {} },
     require: name => {
       if (name === 'axios') return axios;
+      if (name === './playback-device') return { getPlaybackDevice: async requestJson => {
+        assert.equal(typeof requestJson, 'function');
+        return playbackDevice;
+      } };
       if (name === './sm3') return require(path.join(nativeDir, 'sm3'));
       if (name === './download-quality') return require(path.join(nativeDir, 'download-quality'));
       if (name === 'node:crypto') return { ...crypto, createHash(name, ...args) {
@@ -61,20 +68,16 @@ function fixture({ wrongVid = false, fallback = 'https://vod.snssdk.com/info', m
       throw new Error(`Unexpected dependency: ${name}`);
     },
   };
-  vm.runInNewContext(fs.readFileSync(path.join(nativeDir, 'app-source.js'), 'utf8') + `
-    const originalDeviceProto = deviceProto;
-    deviceProto = function (deviceId) {
-      signedDeviceIds.push(deviceId);
-      return originalDeviceProto(deviceId);
-    };
-  `, context);
-  return { fetch: context.module.exports.fetchAppPlayUrl, calls, signedDeviceIds };
+  vm.runInNewContext(fs.readFileSync(path.join(nativeDir, 'app-source.js'), 'utf8'), context);
+  return { fetch: context.module.exports.fetchAppPlayUrl, calls };
 }
 
 function nativeFixture() {
   const pending = [];
   const context = { module: { exports: {} }, Buffer, URL, process: { env: {} },
-    require: name => name === 'axios' ? { get: () => new Promise(resolve => pending.push(resolve)) } : require(name.startsWith('.') ? path.join(nativeDir, name) : name),
+    require: name => name === 'axios' ? { get: () => new Promise(resolve => pending.push(resolve)) }
+      : name === './app-source' ? { fetchAppPlayUrl: async () => { throw new Error('Unexpected App lookup in Web cache fixture'); } }
+      : require(name.startsWith('.') ? path.join(nativeDir, name) : name),
   };
   vm.runInNewContext(fs.readFileSync(path.join(nativeDir, 'hongguo.js'), 'utf8') + '\nmodule.exports.parseModelVideo = parseModelVideo;', context);
   return { ...context.module.exports, pending,
@@ -88,7 +91,7 @@ const appRows = videoList => fixture({ videoList, encrypted: false }).fetch('11'
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
 const checks = [
-  ['sequential and concurrent lookups isolate request identities and signed device fields', async () => {
+  ['sequential and concurrent unsigned lookups preserve the same valid device identity', async () => {
     const f = fixture();
     await f.fetch('11');
     await f.fetch('11');
@@ -97,10 +100,13 @@ const checks = [
     assert.equal(requests.length, 5, 'one model request per lookup; no retry loop');
     for (const field of ['iid', 'device_id']) {
       const ids = requests.map(call => new URL(call.url).searchParams.get(field));
-      assert.ok(ids.every(id => /^\d{16}$/.test(id)), `${field} must stay a valid synthetic identifier`);
-      assert.equal(new Set(ids).size, requests.length, `${field} must not be reused across lookups`);
-      if (field === 'device_id') assert.deepEqual(ids, f.signedDeviceIds, 'URL and signed device fields must match');
+      assert.ok(ids.every(id => /^[1-9]\d{15,29}$/.test(id)), `${field} must stay a valid device identifier`);
+      assert.equal(new Set(ids).size, 1, `${field} must remain stable across lookups`);
+      assert.ok(ids.every(id => id === playbackDevice[field]), `${field} must preserve the registered string without precision loss`);
     }
+    const cdids = requests.map(call => new URL(call.url).searchParams.get('cdid'));
+    assert.ok(cdids.every(id => id === playbackDevice.cdid), 'cdid must remain stable across lookups');
+    assert.match(cdids[0], /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i);
     assert.equal(f.calls.length, 10, 'each lookup retains its two-stage flow');
   }],
   ['App H264 takes priority over higher-resolution HEVC', async () => {
@@ -114,11 +120,14 @@ const checks = [
       assert.equal(result.url, mediaUrl('backup'));
     }
   }],
-  ['App skips unusable candidate but never ignores an invalid encryption key', async () => {
+  ['App skips unusable same-tier candidates but never ignores an invalid encryption key', async () => {
     const result = await appRows({ broken: { main_url: mediaUrl('broken'), codec_type: 'h264', quality_desc: '1080P', spade_a: 'bad' },
-      working: { main_url: mediaUrl('working'), codec_type: 'h264', quality_desc: '720P', spade_a: encodedKey() } });
+      working: { main_url: mediaUrl('working'), codec_type: 'h264', quality_desc: '1080P', spade_a: encodedKey() } });
     assert.equal(result.url, mediaUrl('working'));
     assert.equal(result.contentKey, keyHex);
+    await assert.rejects(appRows({ broken: { main_url: mediaUrl('broken'), codec_type: 'h264', quality_desc: '1080P', spade_a: 'bad' },
+      lower: { main_url: mediaUrl('lower'), codec_type: 'h264', quality_desc: '720P', spade_a: encodedKey() } }),
+    /片源地址或密钥无法解析/);
     await assert.rejects(appRows({ one: { main_url: 'https://127.0.0.1/private', backup_url: 'file:///private', codec_type: 'h264' } }));
   }],
   ['legacy parser prefers H264 and keeps a usable backup', async () => {
@@ -172,7 +181,7 @@ const checks = [
       if (crypto.getHashes().includes('sm3')) assert.equal(sm3(input).toString('hex'), crypto.createHash('sm3').update(input).digest('hex'));
     }
   }],
-  ['signed exact-episode model, fallback and compatible media', async () => {
+  ['unsigned exact-episode model, fallback and compatible media', async () => {
     assert.ok(fs.existsSync(path.join(nativeDir, 'app-source.js')), 'app source missing');
     const { fetch, calls } = fixture();
     const result = await fetch('11');

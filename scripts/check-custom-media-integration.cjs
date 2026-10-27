@@ -15,7 +15,8 @@ require('./fixtures/trusted-ipc.cjs')(context, handlers);
   assert.equal(typeof handlers['get-custom-sources'],'function','custom source IPC must exist');
   assert.equal((await handlers['get-media-sources']()).sources.at(-1).id,`custom:${id}`);
   failSave=true; assert.equal((await handlers['save-custom-source']({}, {...settings.custom_sources[0],enabled:false})).success,false); assert.equal(settings.custom_sources[0].enabled,true); assert.equal(cancelled,0); failSave=false;
-  run("resolveFfmpeg=()=>'/fixture/ffmpeg'; probeVideoInfo=async()=>({w:1080,h:1920,duration:2});");
+  // Synthetic HLS bytes; real decoding is covered by check-download-quality-integration.cjs.
+  run("resolveFfmpeg=()=>'/fixture/ffmpeg'; probeVideoInfo=async()=>({w:1080,h:1920,duration:2}); verifyDownloadDecode=async()=>{};");
   context.events=[];context.sendToRenderer=(name,payload)=>context.events.push({name,payload});
   context.registerStreamProtocol();
   const result=await handlers['prepare-online-play']({}, {vid,seriesId:sid,prefetch:false});

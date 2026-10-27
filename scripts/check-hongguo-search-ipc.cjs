@@ -24,7 +24,7 @@ function load(searchHongguo) {
     electron,
     './src/store': { getSettings: () => ({}) },
     './src/native/hongguo-search': { searchHongguo },
-    './src/native/hongguo-app-new': { searchNewReleases: async () => [] },
+    './src/native/hongguo-app-new': { searchNewReleasesDetailed: async () => ({ results: [], partial: false }) },
     './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
   };
   const context = vm.createContext({
@@ -137,7 +137,7 @@ function failure(message, kind, fallback) {
   result = await harness.handlers['search-series']({}, '原词，失败', { source: 'hongguo' });
   assert.equal(result.success, true);
   assert.equal(result.partial, true);
-  assert.match(result.error, /模糊补搜未完成/);
+  assert.match(result.error, /补充搜索未完成/);
   assert.equal(result.results.length, 1);
   harness.cleanup();
 

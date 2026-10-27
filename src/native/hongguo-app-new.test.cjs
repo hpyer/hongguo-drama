@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
-  listNewReleases, searchNewReleases, matchNewReleases, newReleaseFromRow, collectRows,
+  listNewReleases, searchNewReleases, searchNewReleasesDetailed, matchNewReleases, newReleaseFromRow, collectRows,
   clearNewReleaseCache, DEFAULT_PAGES, MAX_RESULTS,
 } = require('./hongguo-app-new');
 
@@ -113,6 +113,19 @@ test('one unavailable genre still returns the other and is not cached as complet
   } });
   assert.equal(second.partial, false);
   assert.equal(second.items.length, 2);
+  clearNewReleaseCache();
+});
+
+test('detailed search preserves a partial catalog result', async () => {
+  clearNewReleaseCache();
+  const request = async (signed) => {
+    const body = JSON.parse(signed.body.toString());
+    if (body.select_items.genre[0] === 'short_play') return page([row('7500000000000000001', '部分新剧')], false);
+    throw new Error('AI 目录超时');
+  };
+  const result = await searchNewReleasesDetailed('部分新剧', { pages: 1, request });
+  assert.equal(result.partial, true);
+  assert.deepEqual(result.results.map(item => item.series_id), ['7500000000000000001']);
   clearNewReleaseCache();
 });
 

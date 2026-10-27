@@ -4,12 +4,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const http = require('node:http');
 const nativeDir = path.join(__dirname, '../src/native');
+const playbackDevice = Object.freeze({ device_id: '7000000000000000001', iid: '7000000000000000002', cdid: '00000000-0000-4000-8000-000000000003' });
 const media = name => `https://v3-reading.qznovelvod.com/${name}.mp4`;
 const webPage = (vid = '11', sid = '1', extra = {}) => `<script>window._ROUTER_DATA=${JSON.stringify({ loaderData: {
   'player_(series_id)/(vid)/page': { isSuccess: true, vid, series_id: sid, seriesDetail: { series_id: sid, vid_list: ['11'] },
     publicVideoSeo: { available: true, itemId: vid, seriesId: sid }, ...extra },
 } })}</script><script type="application/ld+json">${JSON.stringify({ '@type': 'VideoObject', url: `https://hongguoduanju.com/player/${sid}/${vid}`, contentUrl: media('web') })}</script>`;
 function load(file, dependencies) {
+  dependencies = { './playback-device': { getPlaybackDevice: async () => playbackDevice }, ...dependencies };
   const context = { Buffer, URL, URLSearchParams, AbortSignal, AbortController, process: { env: {} }, module: { exports: {} },
     console: { warn() {} }, setTimeout: (fn, ms) => ms === 600 ? setTimeout(fn, 0) : fn(),
     require: name => Object.hasOwn(dependencies, name) ? dependencies[name] : require(name.startsWith('.') ? path.join(nativeDir, name) : name) };
@@ -29,9 +31,9 @@ function appFixture(rows) {
   const calls = [];
   const app = load('app-source.js', { axios: async config => {
     calls.push(config);
-    return { status: 200, headers: {}, data: config.method === 'POST'
+    return { status: 200, headers: {}, data: JSON.stringify(config.method === 'POST'
       ? { data: { '11': { video_model: { fallback_api: 'https://vod.snssdk.com/info' } } } }
-      : { video_info: { data: { video_list: rows } } } };
+      : { video_info: { data: { video_list: rows } } }) };
   } });
   return { ...app, calls };
 }
@@ -77,8 +79,11 @@ const checks = [
       [{ data: first }, { video_info: { data: { video_list: { one: { codec_type: 'h264', width: 720, height: 1280, main_url: 'https://127.0.0.1/private' } } } } }, 'SECURITY_BLOCKED'],
     ];
     for (const [response, second, expected] of cases) {
-      const app = load('app-source.js', { axios: async config => ({ status: 200, headers: {},
-        ...(config.method === 'POST' ? response : { data: second }) }) });
+      const app = load('app-source.js', { axios: async config => {
+        const result = { status: 200, headers: {}, ...(config.method === 'POST' ? response : { data: second }) };
+        if (typeof result.data !== 'string') result.data = JSON.stringify(result.data);
+        return result;
+      } });
       const f = load('hongguo.js', { './app-source': app });
       const result = await f.fetchPlayUrlSingle('11', '1', { quality: '720p' });
       assert.equal(result.sources[0].code, expected);
@@ -150,7 +155,7 @@ const checks = [
       assert.equal(await f.fetchPlayUrlFromWeb('11', '1'), null, 'unverified webpage must not be labelled as the requested episode');
     }
   }],
-  ['Episode list retries both web routes, then retries a transient empty detail API', async () => {
+  ['Episode list retries both web routes, then retries a transient network failure', async () => {
     const webCalls = [], apiCalls = [], sid = '918273645';
     const f = load('hongguo.js', {
       axios: {
@@ -160,7 +165,7 @@ const checks = [
         },
         post: async () => {
           apiCalls.push(1);
-          if (apiCalls.length < 3) return { status: 200, headers: {}, data: Buffer.alloc(0) };
+          if (apiCalls.length < 3) throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
           return { status: 200, headers: {}, data: Buffer.from(JSON.stringify({ code: 0, data: {
             [sid]: { video_data: { series_title: '重试成功', video_list: [
               { vid: '101', vid_index: 1 }, { vid: '102', vid_index: 2 },
@@ -171,15 +176,16 @@ const checks = [
     });
     const data = await f.fetchEpisodeList(sid);
     assert.equal(data.total, 2);
-    assert.equal(apiCalls.length, 3, 'empty 200 responses must be retried before giving up');
+    assert.equal(apiCalls.length, 3, 'transient network failures must still be retried');
     assert.equal(webCalls.filter(url => url.includes(`/player/${sid}`)).length, 3, 'the retry must try the player route with both resolvers');
     assert.equal(webCalls.filter(url => url.includes(`series_id=${sid}`)).length, 3, 'the retry must try the detail route with both resolvers');
   }],
   ['Episode list turns repeated aborts and empty responses into one readable failure', async () => {
+    let apiCalls = 0;
     const f = load('hongguo.js', {
       axios: {
         get: async () => { throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); },
-        post: async () => ({ status: 200, headers: {}, data: Buffer.alloc(0) }),
+        post: async () => { apiCalls++; return { status: 200, headers: {}, data: Buffer.alloc(0) }; },
       },
     });
     await assert.rejects(f.fetchEpisodeList('918273646'), error => {
@@ -188,6 +194,7 @@ const checks = [
       assert.doesNotMatch(error.message, /aborted/);
       return true;
     });
+    assert.equal(apiCalls, 1, 'empty 200 responses must stop without retrying');
   }],
   ['Protected website SEO preview never replaces the complete App episode', async () => {
     const calls = [];
@@ -302,7 +309,7 @@ const checks = [
     assert.deepEqual(Array.from(result.variants, v => v.url), ['main', 'backup', 'extra', 'hevc', 'list'].map(media));
     for (const candidate of result.variants) {
       assert.equal(candidate.source, 'app'); assert.equal(candidate.vid, '11');
-      assert.equal(candidate.userAgent, f.calls[0].headers['User-Agent']);
+      assert.equal(candidate.userAgent, f.calls[1].headers['User-Agent']);
       assert.equal(candidate.referer, undefined, 'App media must not start with the rejected website Referer');
       assert.equal(candidate.variants, undefined);
     }

@@ -196,9 +196,17 @@ function matchNewReleases(items, keyword) {
     .map(entry => entry.item).slice(0, MAX_RESULTS);
 }
 
-async function searchNewReleases(keyword, options = {}) {
+async function searchNewReleasesDetailed(keyword, options = {}) {
   const list = await listNewReleases(options);
-  return matchNewReleases(list.items, keyword);
+  return {
+    results: matchNewReleases(list.items, keyword),
+    partial: list.partial === true,
+    cached: list.cached === true,
+  };
+}
+
+async function searchNewReleases(keyword, options = {}) {
+  return (await searchNewReleasesDetailed(keyword, options)).results;
 }
 
 function clearNewReleaseCache() {
@@ -208,6 +216,7 @@ function clearNewReleaseCache() {
 module.exports = {
   listNewReleases,
   searchNewReleases,
+  searchNewReleasesDetailed,
   matchNewReleases,
   newReleaseFromRow,
   collectRows,
