@@ -959,7 +959,7 @@ async function mount(file, api, props = {}, storage = null) {
     const old = deferred(), opened = [], pages = []; let calls = 0;
     const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: p => p.source === 'xifan' ? (pages.push(p.page), Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '西饭片单' }], genres: [{ slug: '68', label: '都市' }], total: 0, totalPages: 0, hasMore: p.page === 1 })) : ++calls === 1 ? Promise.resolve({ success: true, results: [{ series_id: 'H', series_title: '红果片单' }], sourceUrl: 'https://www.hongguoduanju.com/category/real-drama' }) : old.promise, searchWindowShow: async (...args) => opened.push(args) }, {}, memoryStorage({ 'hongguo.catalog.channel.v1': 'web' }));
     await ui.flush(); await ui.button('打开来源页面').props.onClick();
-    assert.equal(opened[0][1], 'https://hongguoduanju.com/category/real-drama');
+    assert.equal(opened[0][1], 'https://www.hongguoduanju.com/category/real-drama');
     ui.button('刷新片单').props.onClick(); ui.render();
     const source = ui.find(n => n.props['aria-label'] === '短剧来源'); assert.ok(source, 'source selector missing');
     source.props.onChange({ target: { value: 'xifan' } }); await ui.flush();
