@@ -11,7 +11,7 @@ const videoEnhancementStub = {
 const shortcutSource = transformSync(fs.readFileSync(path.join(__dirname, '../src/shortcuts.js'), 'utf8'), { loader: 'js', format: 'cjs' }).code;
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/Player.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
-function mount({ local = false, saved = null, transcode, prepare, props = {}, episodeCount = 2, storage = new Map(), seriesId = 'A', settings = {}, lockedIndexes = [], apiOverrides = {} } = {}) {
+function mount({ local = false, saved = null, transcode, prepare, props = {}, episodeCount = 2, storage = new Map(), seriesId = 'A', settings = {}, lockedIndexes = [], apiOverrides = {}, now = () => Date.now() } = {}) {
   // Playback fixtures model an explicit play command; target:null exercises passive library entry.
   props = { setEpisodesOpen() {}, ...((local || saved) ? { target: { seriesId, resume: true, ts: 1 } } : {}), ...props };
   const slots = [], effects = [], cleanups = [], saves = [], prepares = [], transcodes = [], cancelled = [];
@@ -76,7 +76,7 @@ function mount({ local = false, saved = null, transcode, prepare, props = {}, ep
   const shortcutModule = { exports: {} };
   vm.runInNewContext(shortcutSource, { module: shortcutModule, exports: shortcutModule.exports, window, Event });
   const setTimer = (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; };
-  const context = { module: { exports: {} }, require: n => n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences }) => preferences } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), requestAnimationFrame: fn => setTimer(fn, 0), cancelAnimationFrame: id => timers.delete(id), console };
+  const context = { module: { exports: {} }, Date: class extends Date { static now() { return now(); } }, require: n => n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences }) => preferences } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), requestAnimationFrame: fn => setTimer(fn, 0), cancelAnimationFrame: id => timers.delete(id), console };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
   const nodes = () => { const out = []; const walk = n => { if (!n || typeof n !== 'object') return; out.push(n); n.children?.forEach(walk); }; walk(tree); return out; };

@@ -12,6 +12,12 @@ import './Player.css';
 import { Play, Film, Download, Check, RefreshCw, Layers, X, Trash2, ChevronDown, Zap } from './icons';
 
 const localMediaKey = (seriesId, episode) => JSON.stringify([seriesId, episode?.vid, episode?.fileUrl, episode?.fileSize, episode?.taskId]);
+// 预取失败后短暂退避，避免 timeupdate 4Hz 反复撞同一个坏节点。
+const PREFETCH_RETRY_MS = 15 * 1000;
+// 播放期间最多预取后续两集；跳到更远时再按新位置补齐。
+const PREFETCH_AHEAD = 2;
+
+const prefetchKey = (seriesId, vid, quality) => JSON.stringify([String(seriesId || ''), String(vid || ''), quality || 'auto']);
 
 /**
  * Player —— 内置播放器
@@ -112,7 +118,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const selectedSeriesRef = useRef('');
   const selectionVersion = useRef(0);
   const onlineRequestRef = useRef(null);
-  const prefetchRef = useRef(null);
+  const prefetchRef = useRef([]);
+  const prefetchFailureRef = useRef(new Map());
   const mediaVersion = useRef(0);
   const compatRequestRef = useRef(null);
   const decodeTimer = useRef(null);
@@ -157,11 +164,17 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     if (request) return window.electronAPI.releaseOnlinePlay({ requestId: request.requestId, streamId: request.streamId }).catch(() => {});
   }, []);
 
-  const releasePrefetch = useCallback(() => {
-    const request = prefetchRef.current;
-    prefetchRef.current = null;
-    if (request) window.electronAPI.releaseOnlinePlay({ requestId: request.requestId }).catch(() => {});
+  const releasePrefetchRequest = useCallback((request) => {
+    if (request == null) return;
+    window.electronAPI.releaseOnlinePlay({ requestId: request.requestId, streamId: request.streamId }).catch(() => {});
   }, []);
+
+  const releasePrefetch = useCallback(() => {
+    const requests = prefetchRef.current;
+    prefetchRef.current = [];
+    prefetchFailureRef.current.clear();
+    for (const request of requests) releasePrefetchRequest(request);
+  }, [releasePrefetchRequest]);
 
   const cancelCompat = useCallback(() => {
     const request = compatRequestRef.current;
@@ -171,7 +184,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     }
   }, []);
 
-  const resetPlayback = useCallback((autoplay = true) => {
+  const resetPlayback = useCallback((autoplay = true, preservePrefetch = false) => {
     fallbackRef.current = null;
     setPlaybackRequested(true);
     pendingAutoplayRef.current = autoplay && activeRef.current;
@@ -186,7 +199,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     clearTimeout(decodeTimer.current);
     cancelCompat();
     releaseOnline();
-    releasePrefetch();
+    if (preservePrefetch === false) releasePrefetch();
     setOnlineVid(null);
     setOnlineUrl('');
     setOnlineProgress(null);
@@ -653,12 +666,15 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const handlePlaying = useCallback((event) => {
     const media = loadedMediaRef.current;
     const element = event.currentTarget;
-    if (!activeRef.current || element.paused || playbackVersion !== mediaVersion.current || !canPlay || media?.version !== mediaVersion.current || media.element !== element) return;
-    if (element.currentSrc && element.currentSrc !== videoSrc) return;
+    if (!activeRef.current || element.paused || media?.version !== mediaVersion.current || media.element !== element) return;
+    // 先记录“这一集真的播起来了”，不要因为 canPlay/playbackVersion 的 React 状态晚一拍
+    // 就永久跳过预取和断点保存；下面的解码判定仍要求状态已经对齐。
     if (!media.played) {
       media.played = true;
       persistPosition(true);
     }
+    if (playbackVersion !== mediaVersion.current || !canPlay) return;
+    if (element.currentSrc && videoSrc && element.currentSrc !== videoSrc) return;
     setAutoAdvancing(false);
     setDecodeFailed(false);
     setMediaBuffering(false);
@@ -692,9 +708,27 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       const quality = stateRef.current.onlineQuality;
       onlineSourceRef.current = `${activeSeriesId}:${vidIndex}`;
       const seekTo = resumeAt ?? (vidIndex === stateRef.current.currentIndex ? currentPosition() : 0);
-      const prefetched = !force && prefetchRef.current?.vid === ep.vid && prefetchRef.current?.seriesId === activeSeriesId && prefetchRef.current?.quality === quality ? prefetchRef.current : null;
-      if (prefetched) prefetchRef.current = null;
-      resetPlayback(autoplay);
+      const prefetched = force === false
+        ? prefetchRef.current.find(item => item.vid === ep.vid && item.seriesId === activeSeriesId && item.quality === quality) || null
+        : null;
+      if (prefetched) prefetchFailureRef.current.delete(prefetchKey(activeSeriesId, prefetched.vid, prefetched.quality));
+      if (force) {
+        releasePrefetch();
+      } else {
+        // 跳到更远的集数时，目标集之前或不同清晰度的旧预取立即释放；
+        // 目标集之后且同剧同清晰度的预取继续保留，切过去后可直接复用。
+        const kept = [];
+        for (const item of prefetchRef.current) {
+          if (item === prefetched) continue;
+          if (item.seriesId !== activeSeriesId || item.quality !== quality || Number(item.vidIndex) <= Number(vidIndex)) {
+            releasePrefetchRequest(item);
+          } else {
+            kept.push(item);
+          }
+        }
+        prefetchRef.current = kept;
+      }
+      resetPlayback(autoplay, force === false);
       setCompatMap(prev => { const next = { ...prev }; delete next[vidIndex]; return next; });
       const request = prefetched || { requestId: crypto.randomUUID(), vid: ep.vid };
       onlineRequestRef.current = request;
@@ -815,23 +849,64 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     [episodes]
   );
 
+  // 只预取后续可在线播放、尚未锁定且没有本地文件的分集，最多两集。
+  const prefetchCandidates = useCallback((fromIndex, count = PREFETCH_AHEAD) => {
+    const start = episodes.findIndex((episode) => episode.vid_index === fromIndex);
+    if (start === -1) return [];
+    const result = [];
+    for (let index = start + 1; index < episodes.length && result.length < count; index += 1) {
+      const episode = episodes[index];
+      if (episode?.locked || String(episode?.vid || '') === '' || usableLocal(episode, String(activeSeriesId))) continue;
+      result.push(episode);
+    }
+    return result;
+  }, [episodes, activeSeriesId, usableLocal]);
+
   const prepareNextEpisode = (event) => {
     const video = event.currentTarget;
     const media = loadedMediaRef.current;
-    if (!cacheNext || !canPlay || video.paused || !media?.played || media.version !== mediaVersion.current
-      || media.element !== video || (video.currentSrc && video.currentSrc !== videoSrc)) return;
-    const next = findNext(currentIndex);
-    if (!next?.vid || usableLocal(next, String(activeSeriesId)) || prefetchRef.current) return;
-    const request = { requestId: crypto.randomUUID(), vid: next.vid, seriesId: activeSeriesId, vidIndex: next.vid_index, quality: onlineQuality };
-    prefetchRef.current = request;
-    request.promise = window.electronAPI.prepareOnlinePlay({ ...request, prefetch: true })
-      .catch(error => ({ success: false, error: error.message }))
-      .then(result => {
-        if (prefetchRef.current !== request && onlineRequestRef.current !== request) {
-          window.electronAPI.releaseOnlinePlay({ requestId: request.requestId, streamId: result?.streamId }).catch(() => {});
-        } else if (prefetchRef.current === request) refreshOnlineCacheInfo();
-        return result;
-      });
+    // 这里只依赖当前元素和版本；media.played 可能因 playing 事件的 React 状态晚一拍而
+    // 还没置位，不能让它永久挡住后续分集预取。
+    if (cacheNext === false || canPlay === false || video.paused || media?.version !== mediaVersion.current || media.element !== video) return;
+    const targets = prefetchCandidates(currentIndex);
+    const desired = new Set(targets.map(episode => prefetchKey(activeSeriesId, episode.vid, onlineQuality)));
+    const kept = [];
+    for (const request of prefetchRef.current) {
+      if (desired.has(prefetchKey(request.seriesId, request.vid, request.quality))) kept.push(request);
+      else releasePrefetchRequest(request);
+    }
+    prefetchRef.current = kept;
+    for (const episode of targets) {
+      const key = prefetchKey(activeSeriesId, episode.vid, onlineQuality);
+      if (kept.some(request => prefetchKey(request.seriesId, request.vid, request.quality) === key)) continue;
+      const failedAt = prefetchFailureRef.current.get(key);
+      if (failedAt && Date.now() - failedAt < PREFETCH_RETRY_MS) continue;
+      const request = { requestId: crypto.randomUUID(), vid: episode.vid, seriesId: activeSeriesId,
+        vidIndex: episode.vid_index, quality: onlineQuality };
+      prefetchRef.current = [...prefetchRef.current, request];
+      request.promise = window.electronAPI.prepareOnlinePlay({ ...request, prefetch: true })
+        .catch(error => ({ success: false, error: error?.message || String(error) }))
+        .then(result => {
+          if (prefetchRef.current.includes(request)) {
+            if (result?.success) {
+              prefetchFailureRef.current.delete(key);
+              refreshOnlineCacheInfo();
+            } else {
+              const index = prefetchRef.current.indexOf(request);
+              if (index >= 0) prefetchRef.current.splice(index, 1);
+              prefetchFailureRef.current.set(key, Date.now());
+              if (result?.streamId) request.streamId = result.streamId;
+              releasePrefetchRequest(request);
+            }
+          } else if (onlineRequestRef.current === request) {
+            // 已被切集流程接管，当前播放会话负责后续释放。
+          } else {
+            if (result?.streamId) request.streamId = result.streamId;
+            releasePrefetchRequest(request);
+          }
+          return result;
+        });
+    }
   };
 
   // 先交接下一集或释放当前媒体，再清理刚看完的文件和缓存。
@@ -930,7 +1005,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   }, [restoreFullscreenScroll]);
 
   const toggleFullscreen = useCallback(async () => {
-    if (document.querySelector('.stealth-mode')) { showToast('请先退出隐身小窗'); return; }
+    if (document.querySelector('.stealth-mode')) { showToast('请先退出小窗模式'); return; }
     try {
       if (portrait) { setWindowFill(fill => !fill); return; }
       if (document.fullscreenElement === stageRef.current) await document.exitFullscreen();
@@ -1252,8 +1327,9 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
           <button aria-pressed={cacheNext} className={`btn btn-outline ${cacheNext ? 'btn-autonext-on' : ''}`}
             disabled={qualityLoading || playbackSettingSaving}
             onClick={() => savePlaybackSetting('cache_next_episode', !cacheNext, setCacheNext)}
-            title="开始播放后预缓存下一集，减少切集等待；会使用网络流量">
-            <Download size={15} />缓存下一集 {cacheNext ? '开' : '关'}
+            style={{ whiteSpace: 'nowrap' }}
+            title="开始播放后最多预缓存后续两集，减少连续切集等待；会使用网络流量">
+            <Download size={15} />缓存后续 2 集 {cacheNext ? '开' : '关'}
           </button>
           <button
             aria-pressed={autoNext}

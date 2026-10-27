@@ -27,7 +27,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     now = until;
   };
   let needsRender = false;
-  let cursor = 0, tree, plays = 0, pauses = 0, fullscreenCalls = 0, selectedRate;
+  let cursor = 0, tree, plays = 0, pauses = 0, fullscreenCalls = 0, selectedRate, pipRequests = 0, pipExits = 0, pipError = '';
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
     useState: initial => { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { const next = typeof value === 'function' ? value(slots[i]) : value; if (!Object.is(slots[i], next)) needsRender = true; slots[i] = next; }]; },
@@ -35,12 +35,13 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     useEffect: (fn, deps) => { const i = cursor++; if (!slots[i] || deps.some((v, j) => v !== slots[i][j])) { slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = fn(); }); } },
   };
   const media = { paused: true, ended: false, currentTime: 12, duration: 100, muted: false, volume: 0.7,
+    requestPictureInPicture: async () => { pipRequests++; document.pictureInPictureElement = media; listeners.get('enterpictureinpicture')?.(); },
     play: async () => { plays++; media.paused = false; listeners.get('play')?.(); },
     pause: () => { pauses++; media.paused = true; listeners.get('pause')?.(); },
     addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const document = { activeElement: null, fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
+  const document = { activeElement: null, fullscreenElement: null, pictureInPictureElement: null, pictureInPictureEnabled: true, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); }, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; listeners.get('leavepictureinpicture')?.(); } };
   const stage = { addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
-  const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; } };
+  const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; }, onError: message => { pipError = message; } };
   props.onWindowFill = value => { props.windowFill = value; };
   props.onToggleFullscreen = async () => {
     if (props.portrait) props.onWindowFill(!props.windowFill);
@@ -61,6 +62,25 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   assert.equal(find('播放进度').props.max, 100); assert.equal(find('播放进度').props.value, 12);
   await find('播放').props.onClick(); render(); assert.equal(plays, 1); assert.ok(find('暂停'));
   find('暂停').props.onClick(); render(); assert.equal(pauses, 1);
+  assert.equal(find('画中画').props['aria-pressed'], false);
+  await find('画中画').props.onClick(); render();
+  assert.equal(pipRequests, 1, 'picture-in-picture control must request a native floating window');
+  assert.equal(find('退出画中画').props['aria-pressed'], true);
+  props.source = 'one-source-change'; render();
+  assert.equal(pipExits, 0, 'source changes and auto-next must keep the native picture-in-picture window open');
+  assert.equal(find('退出画中画').props['aria-pressed'], true);
+  await find('退出画中画').props.onClick(); render();
+  assert.equal(pipExits, 1, 'picture-in-picture control must close the native floating window');
+  assert.equal(find('画中画').props['aria-pressed'], false);
+  const requestPictureInPicture = media.requestPictureInPicture;
+  document.pictureInPictureEnabled = false;
+  await find('画中画').props.onClick(); render();
+  assert.match(pipError, /不支持画中画/);
+  document.pictureInPictureEnabled = true;
+  media.requestPictureInPicture = async () => { const error = new Error('gesture required'); error.name = 'NotAllowedError'; throw error; };
+  await find('画中画').props.onClick(); render();
+  assert.match(pipError, /开始播放/);
+  media.requestPictureInPicture = requestPictureInPicture;
   find('播放进度').props.onChange({ target: { value: '37.5' } }); assert.equal(media.currentTime, 37.5);
   find('静音').props.onClick(); listeners.get('volumechange')?.(); render(); assert.equal(media.muted, true); assert.ok(find('取消静音'));
   find('音量').props.onChange({ target: { value: '0.4' } }); assert.equal(media.volume, 0.4); assert.equal(media.muted, false);
@@ -453,5 +473,5 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     assert.equal(controls(blocked).props.continuing, false, 'autoplay rejection must leave the play control accessible');
     blocked.unmount();
   }
-  console.log('PASS video controls: one-second pointer idle and quiet held-key boundaries; previous-to-auto-next continuity with stationary-pointer/video-focus/early-pause events; real movement/click/Tab/focused-control/manual-pause access; persistent-pause recovery; default/custom previous/next keydown/keyup/reset/preparation/source/metadata/playing, local/online shortcut matrix, input/menu boundaries, play/pause, seek, volume, lower-right 4× menu, fullscreen idle/reveal, auto-next pause/preparing/source/metadata/play continuity, local/online parent wiring, failure/end recovery, pause/menu/drag/focus guards, portrait and exit cleanup');
+  console.log('PASS video controls: one-second pointer idle and quiet held-key boundaries; previous-to-auto-next continuity with stationary-pointer/video-focus/early-pause events; real movement/click/Tab/focused-control/manual-pause access; persistent-pause recovery; default/custom previous/next keydown/keyup/reset/preparation/source/metadata/playing, local/online shortcut matrix, input/menu boundaries, play/pause, seek, volume, lower-right 4× menu, picture-in-picture request/exit/error, fullscreen idle/reveal, auto-next pause/preparing/source/metadata/play continuity, local/online parent wiring, failure/end recovery, pause/menu/drag/focus guards, portrait and exit cleanup');
 })().catch(error => { console.error(error); process.exitCode = 1; });

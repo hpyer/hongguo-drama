@@ -5,19 +5,20 @@ const { cleanTitle } = require('./hongguo-app-search');
 const { catalogCover } = require('./hongguo-app-catalog');
 
 const CATEGORY_API = '/reading/distribution/category/landpage/v/';
-const REQUEST_TIMEOUT_MS = 4000;
+const REQUEST_TIMEOUT_MS = 8000;
 const CACHE_TTL_MS = 60 * 1000;
 const PAGE_LIMIT = 50;
-const DEFAULT_PAGES = 1;
-const MAX_RESULTS = 10;
+// 默认翻两页（真人 + AI 各最多 100 条），降低繁忙日当天新剧落在首屏之外的概率。
+const DEFAULT_PAGES = 2;
+const MAX_RESULTS = 20;
 // 真人剧与 AI 剧使用同一分类接口、不同筛选值；两者都能出现在搜索结果里。
 const GENRES = [
   { reqScene: 'default', genre: 'short_play' },
   { reqScene: 'ai_series', genre: 'ai_series' },
 ];
 
-let cache = null; // { expires, items }
-let inflight = null;
+let cache = null; // { expires, pages, items }
+let inflight = null; // { pages, task }
 
 function appError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -137,8 +138,8 @@ async function fetchGenre(config, { pages, deadline, request }) {
   return rows;
 }
 
-function cachedItems() {
-  return cache && cache.expires > Date.now() ? cache.items : null;
+function cachedItems(pages) {
+  return cache && cache.expires > Date.now() && cache.pages >= pages ? cache.items : null;
 }
 
 /**
@@ -147,12 +148,12 @@ function cachedItems() {
  */
 async function listNewReleases(options = {}) {
   const { pages = DEFAULT_PAGES, deadline = 0, request = defaultRequest, useCache = true } = options || {};
-  const cached = useCache ? cachedItems() : null;
+  const count = Math.max(1, Math.min(8, Number(pages) || DEFAULT_PAGES));
+  const cached = useCache ? cachedItems(count) : null;
   if (cached) return { items: cached, cached: true, partial: false };
-  if (inflight) return inflight;
+  if (inflight && inflight.pages >= count) return inflight.task;
   const budget = Number(deadline) > 0 ? deadline : Date.now() + REQUEST_TIMEOUT_MS;
   if (budget <= Date.now()) throw appError('App 上新请求超时', 'APP_TIMEOUT');
-  const count = Math.max(1, Math.min(8, Number(pages) || DEFAULT_PAGES));
   const task = (async () => {
     const settled = await Promise.allSettled(GENRES.map(config => fetchGenre(config, { pages: count, deadline: budget, request })));
     const rows = [], failures = [];
@@ -164,10 +165,11 @@ async function listNewReleases(options = {}) {
     if (!items.length && failures.length) throw failures[0];
     const result = { items, cached: false, partial: failures.length > 0 };
     // 只缓存完整结果；部分失败或空列表下次搜索重新请求，避免把上游一次空响应锁住一分钟。
-    if (!result.partial && items.length) cache = { expires: Date.now() + CACHE_TTL_MS, items };
+    if (result.partial === false && items.length) cache = { expires: Date.now() + CACHE_TTL_MS, pages: count, items };
     return result;
-  })().finally(() => { inflight = null; });
-  inflight = task;
+  })();
+  inflight = { pages: count, task };
+  task.finally(() => { if (inflight?.task === task) inflight = null; }).catch(() => {});
   return task;
 }
 

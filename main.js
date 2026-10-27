@@ -1447,7 +1447,7 @@ async function searchNewReleasesForSearch(keyword, options = {}) {
   if (!budget || budget - Date.now() < 900) return { results: [], checked: false, error: '' };
   try {
     const results = await require('./src/native/hongguo-app-new').searchNewReleases(keyword, {
-      deadline: Math.min(budget, Date.now() + 4000),
+      deadline: Math.min(budget, Date.now() + 8000),
     });
     return { results: Array.isArray(results) ? results : [], checked: true, error: '' };
   } catch (error) {

@@ -24,7 +24,7 @@ const { mount } = require('./check-player-resume.cjs');
   for (const timer of ui.timers.values()) if (timer.delay === 0) timer.fn();
   assert.equal(scrolled?.block, 'center', 'download shortcut scrolls to this page download tools');
 
-  for (const [label, key, next] of [['缓存下一集', 'cache_next_episode', false], ['兼容模式', 'compat_mode', false]]) {
+  for (const [label, key, next] of [['缓存后续 2 集', 'cache_next_episode', false], ['兼容模式', 'compat_mode', false]]) {
     assert.equal(ui.button(label).props['aria-pressed'], true);
     await ui.button(label).props.onClick(); await ui.flush();
     assert.equal(ui.button(label).props['aria-pressed'], next);

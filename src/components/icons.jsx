@@ -365,6 +365,13 @@ export const Tag = (p) => (
   </svg>
 );
 
+export const PictureInPicture = (p) => (
+  <svg {...baseProps(p.size, p.strokeWidth, p.className, p.style)}>
+    <path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
+    <rect x="13" y="13" width="8" height="6" rx="1" />
+  </svg>
+);
+
 export const Folder = (p) => (
   <svg {...baseProps(p.size, p.strokeWidth, p.className, p.style)}>
     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />

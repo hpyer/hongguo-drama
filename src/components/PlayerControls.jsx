@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Settings as SettingsIcon } from './icons';
+import { Play, Pause, Settings as SettingsIcon, PictureInPicture } from './icons';
 import './PlayerControls.css';
 import { DEFAULT_SHORTCUTS, SHORTCUT_ACTIONS, formatShortcut, ignoresPlaybackShortcut, shortcutKey } from '../shortcuts';
 import { VideoEnhancementControls } from './VideoEnhancement';
@@ -15,6 +15,7 @@ const Icon = ({ children }) => <svg width="18" height="18" viewBox="0 0 24 24" f
 export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAULT_SHORTCUTS, onToggleFullscreen, videoRef, stageRef, source, available, continuing = false, autoContinue = false, rate, onRateChange, onError, pictureMode = 'fit', onPictureModeChange, portrait = false, windowFill = false, onWindowFill, seriesTitle = '', episodes = [], currentIndex, onEpisodeChange, onlineQuality = 'auto', supportsOnlineQuality = false, onQualityChange, onOpenSettings }) {
   const [media, setMedia] = useState({ paused: true, ended: false, time: 0, duration: 0, muted: false, volume: 1 });
   const [fullscreen, setFullscreen] = useState(false);
+  const [pictureInPicture, setPictureInPicture] = useState(false);
   const [clock, setClock] = useState(() => formatClock());
   const [menuOpen, setMenuOpen] = useState(false);
   const [danmakuOpen, setDanmakuOpen] = useState(false);
@@ -32,6 +33,7 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   const menuRef = useRef(null);
   const menuButtonRef = useRef(null);
   const speedRef = useRef(null);
+  const pipVideoRef = useRef(null);
   const navigationKeysRef = useRef(new Set());
   const pointerRef = useRef(null);
   const idleDeadlineRef = useRef(0);
@@ -169,6 +171,32 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
   }, [stageRef]);
 
   useEffect(() => {
+    const video = videoRef.current;
+    if (video == null) return undefined;
+    pipVideoRef.current = video;
+    const sync = () => setPictureInPicture(document.pictureInPictureElement === video);
+    const enter = () => setPictureInPicture(true);
+    const leave = () => setPictureInPicture(false);
+    video.addEventListener('enterpictureinpicture', enter);
+    video.addEventListener('leavepictureinpicture', leave);
+    sync();
+    return () => {
+      video.removeEventListener('enterpictureinpicture', enter);
+      video.removeEventListener('leavepictureinpicture', leave);
+    };
+  }, [videoRef, source]);
+
+  // 只在控件真正卸载时关闭画中画；自动连播或切清晰度会让 source 变化，
+  // 但复用同一个 video 元素，此时应继续留在系统小窗里。
+  useEffect(() => () => {
+    const video = videoRef.current || pipVideoRef.current;
+    if (video && document.pictureInPictureElement === video) {
+      document.exitPictureInPicture?.()?.catch?.(() => {});
+    }
+  }, [videoRef]);
+
+
+  useEffect(() => {
     if (!expanded) return;
     setClock(formatClock());
     // 只到分钟，15 秒刷新一次即可，不随播放进度重渲染。
@@ -253,6 +281,25 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
     try { if (video.paused) await video.play(); else video.pause(); }
     catch { onError?.('暂时无法播放，请重试本集'); }
   };
+  const togglePictureInPicture = async () => {
+    const video = videoRef.current;
+    if (!available || !video) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        return;
+      }
+      if (!document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== 'function') {
+        onError?.('当前系统不支持画中画小窗');
+        return;
+      }
+      await video.requestPictureInPicture();
+    } catch (error) {
+      onError?.(error?.name === 'NotAllowedError'
+        ? '请先开始播放，再开启画中画'
+        : '无法开启画中画，请确认视频正在播放后重试');
+    }
+  };
   const seek = event => {
     const video = videoRef.current;
     if (!available || !video || !media.duration) return;
@@ -322,6 +369,11 @@ export default function PlayerControls({ danmaku, enhancement, shortcuts = DEFAU
         </div>
         <button type="button" data-player-control aria-label={expanded ? '退出全屏' : '全屏'} title={`${expanded ? '退出全屏' : portrait ? '填满当前窗口' : '全屏'}（${formatShortcut(shortcuts.fullscreen)}）`} onClick={onToggleFullscreen}>
           <Icon><path d={expanded ? 'M9 3v6H3m12-6v6h6M9 21v-6H3m12 6v-6h6' : 'M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6'} /></Icon>
+        </button>
+        <button type="button" data-player-control aria-label={pictureInPicture ? '退出画中画' : '画中画'} aria-pressed={pictureInPicture}
+          title={pictureInPicture ? '退出画中画小窗' : '画中画：弹出悬浮小窗，切换虚拟桌面后继续播放'}
+          disabled={!available} onClick={togglePictureInPicture}>
+          <PictureInPicture size={18} />
         </button>
         <button type="button" data-player-control className="player-controls-rate" aria-label="增加播放速度" title={`播放速度 ${rate}×，点击增加 0.25 倍，4 倍后回到 1 倍`} onClick={() => onRateChange(rate >= 4 ? 1 : Math.min(4, rate + 0.25))}>{rate}×</button>
         <div className="player-controls-options" data-player-menu ref={menuRef}>

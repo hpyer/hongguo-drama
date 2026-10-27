@@ -9,7 +9,8 @@ const tick = (ui, time) => {
   let finish;
   const ui = mount({ prepare: p => p.prefetch ? new Promise(r => { finish = r; }) : { success: true, url: 'hongguo-stream://one' } });
   await ui.flush(); ui.metadata();
-  assert.equal(ui.button('缓存下一集').props['aria-pressed'], true, 'restored playback shortcut reflects the cache preference');
+  assert.equal(ui.button('缓存后续 2 集').props['aria-pressed'], true, 'restored playback shortcut reflects the cache preference');
+  assert.equal(ui.button('缓存后续 2 集').props.style.whiteSpace, 'nowrap', 'two-ahead cache label must stay on one line');
   assert.equal(ui.media.currentTime, 0);
   assert.equal(ui.prepares.length, 2, 'opening episode one must immediately prefetch episode two');
   tick(ui, 1); tick(ui, 2); await ui.flush();
@@ -38,9 +39,11 @@ const tick = (ui, time) => {
   assert.equal(failed.prepares.length, 3, 'playback retries normally after prefetch failure'); failed.unmount();
   const chain = mount({ episodeCount: 3 });
   await chain.flush(); chain.metadata(); await chain.flush();
-  assert.equal(chain.prepares.at(-1).vidIndex, 2);
+  assert.deepEqual(chain.prepares.filter(p => p.prefetch).map(p => p.vidIndex), [2, 3],
+    'opening one episode must prefetch both following playable episodes');
   chain.episode(2); await chain.flush(); chain.metadata(); await chain.flush();
-  assert.equal(chain.prepares.at(-1).vidIndex, 3);
-  assert.equal(chain.prepares.at(-1).prefetch, true); chain.unmount();
+  assert.deepEqual(chain.prepares.filter(p => p.prefetch && p.vidIndex === 3).length, 1,
+    'switching to episode two must reuse episode three preparation without duplicating it');
+  chain.unmount();
   console.log('PASS next-cache: immediate trigger, reuse, skip, settings refresh, cancellation, failure fallback, next-episode chain');
 })().catch(error => { console.error(error); process.exitCode = 1; });

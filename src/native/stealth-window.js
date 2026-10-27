@@ -17,12 +17,14 @@ function createStealthController({ screen, getWindow }) {
       win.setMinimumSize(...saved.minimum);
       win.setBounds(saved.bounds);
       win.setAlwaysOnTop(saved.onTop);
+      win.setVisibleOnAllWorkspaces?.(saved.visibleOnAllWorkspaces, { visibleOnFullScreen: true });
       win.setFullScreenable(true);
       if (saved.maximized) win.maximize();
       send(win);
       return;
     }
-    previous = { bounds: win.getNormalBounds(), minimum: win.getMinimumSize(), onTop: win.isAlwaysOnTop(), maximized: win.isMaximized() };
+    previous = { bounds: win.getNormalBounds(), minimum: win.getMinimumSize(), onTop: win.isAlwaysOnTop(), maximized: win.isMaximized(),
+      visibleOnAllWorkspaces: typeof win.isVisibleOnAllWorkspaces === 'function' ? win.isVisibleOnAllWorkspaces() : false };
     if (win.isMaximized()) win.unmaximize();
     const cursor = screen.getCursorScreenPoint();
     const area = screen.getDisplayNearestPoint(cursor).workArea;
@@ -30,6 +32,7 @@ function createStealthController({ screen, getWindow }) {
     win.setMinimumSize(Math.min(300, width), Math.min(360, height));
     win.setBounds({ width, height, x: Math.max(area.x, Math.min(cursor.x - Math.round(width / 2), area.x + area.width - width)), y: Math.max(area.y, Math.min(cursor.y - 60, area.y + area.height - height)) });
     win.setAlwaysOnTop(true);
+    win.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
     win.setFullScreenable(false);
     reveal(win);
     send(win);

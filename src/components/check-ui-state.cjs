@@ -1296,7 +1296,7 @@ async function mount(file, api, props = {}, storage = null) {
     stored = { ...stored, auto_delete_watched: true, cache_next_episode: true, compat_mode: true };
     ui.setProps({ active: true }); await ui.flush();
     const label = text => ui.find(n => n.type === 'label' && n.children.some(child => child?.props?.className === 'proxy-switch-text' && child.children[0] === text));
-    for (const [text, key] of [['看完自动删除', 'auto_delete_watched'], ['缓存下一集', 'cache_next_episode'], ['自动兼容模式', 'compat_mode']]) {
+    for (const [text, key] of [['看完自动删除', 'auto_delete_watched'], ['缓存后续 2 集', 'cache_next_episode'], ['自动兼容模式', 'compat_mode']]) {
       const control = label(text);
       assert.ok(control, text);
       assert.equal(control.children.find(n => n?.type === 'input').props.checked, stored[key], `${text} must reflect the latest playback setting`);

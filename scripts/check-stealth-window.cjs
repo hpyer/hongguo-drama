@@ -6,12 +6,13 @@ global.setInterval = callback => { tick = callback; return { unref() {} }; };
 global.clearInterval = () => { tick = null; };
 try {
   const original = { x: 100, y: 100, width: 1100, height: 750 };
-  let bounds = { ...original }, minimum = [900, 620], opacity = 1, top = false;
+  let bounds = { ...original }, minimum = [900, 620], opacity = 1, top = false, visibleOnAllWorkspaces = false;
   const messages = [];
   const win = {
     isDestroyed: () => false, isMaximized: () => false, isMinimized: () => false,
     getNormalBounds: () => ({ ...bounds }), getBounds: () => bounds,
     getMinimumSize: () => [...minimum], isAlwaysOnTop: () => top,
+    isVisibleOnAllWorkspaces: () => visibleOnAllWorkspaces, setVisibleOnAllWorkspaces: value => { visibleOnAllWorkspaces = value; },
     setMinimumSize: (...next) => { minimum = next; }, setBounds: next => { bounds = next; },
     setAlwaysOnTop: value => { top = value; }, setOpacity: value => { opacity = value; },
     setFullScreenable() {}, webContents: { send: (name, state) => messages.push({ name, ...state }) },
@@ -22,6 +23,7 @@ try {
   } });
   controller.setEnabled(true);
   assert(controller.enabled && top);
+  assert.equal(visibleOnAllWorkspaces, true);
   assert.equal(bounds.width, 400);
   tick(); assert.equal(opacity, 1);
   cursor = { x: 0, y: 0 }; tick();
@@ -31,7 +33,7 @@ try {
   assert.equal(opacity, 1); assert.equal(messages.at(-1).concealed, false);
   controller.setEnabled(false);
   assert.deepEqual(bounds, original); assert.deepEqual(minimum, [900, 620]);
-  assert.equal(top, false); assert.equal(tick, null); assert.equal(controller.enabled, false);
+  assert.equal(top, false); assert.equal(visibleOnAllWorkspaces, false); assert.equal(tick, null); assert.equal(controller.enabled, false);
   controller.setEnabled(true); controller.dispose(); assert.equal(tick, null);
   console.log('PASS stealth window: bounds, conceal/reveal, original state restoration, cleanup');
 } finally { global.setInterval = interval; global.clearInterval = clear; }

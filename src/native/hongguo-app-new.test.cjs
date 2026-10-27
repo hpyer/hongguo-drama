@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   listNewReleases, searchNewReleases, matchNewReleases, newReleaseFromRow, collectRows,
-  clearNewReleaseCache,
+  clearNewReleaseCache, DEFAULT_PAGES, MAX_RESULTS,
 } = require('./hongguo-app-new');
 
 const row = (id, title, extra = {}) => ({
@@ -119,4 +119,56 @@ test('one unavailable genre still returns the other and is not cached as complet
 test('a past deadline fails before requesting', async () => {
   clearNewReleaseCache();
   await assert.rejects(listNewReleases({ deadline: Date.now() - 1 }), error => error.code === 'APP_TIMEOUT');
+});
+
+test('default search walks two pages per genre and finds a second-page today release', async () => {
+  clearNewReleaseCache();
+  const calls = [];
+  const request = async (signed) => {
+    const body = JSON.parse(signed.body.toString());
+    const genre = body.select_items.genre[0];
+    calls.push({ genre, offset: body.offset });
+    if (genre === 'short_play') {
+      return body.offset === 0
+        ? page([row('7100000000000000001', '第一页旧剧')], true, 50, 'today-session')
+        : page([row('7100000000000000002', '目标今日新剧')], false, 0, 'today-session');
+    }
+    return body.offset === 0
+      ? page([row('7200000000000000001', 'AI 第一页')], true, 50, 'ai-session')
+      : page([row('7200000000000000002', 'AI 第二页')], false, 0, 'ai-session');
+  };
+  const matched = await searchNewReleases('目标今日新剧', { request });
+  assert.equal(DEFAULT_PAGES, 2);
+  assert.equal(MAX_RESULTS, 20);
+  assert.deepEqual(matched.map(item => item.series_id), ['7100000000000000002']);
+  for (const genre of ['short_play', 'ai_series']) {
+    assert.deepEqual(calls.filter(call => call.genre === genre).map(call => call.offset), [0, 50],
+      genre + ' must query both the first and second page by default');
+  }
+  clearNewReleaseCache();
+});
+
+test('one-page cache does not satisfy a later two-page search', async () => {
+  clearNewReleaseCache();
+  let calls = 0;
+  const shallow = async (signed) => {
+    calls += 1;
+    const body = JSON.parse(signed.body.toString());
+    return page([row(body.select_items.genre[0] === 'short_play' ? '7300000000000000001' : '7300000000000000002', '第一页')], true, 50);
+  };
+  const first = await listNewReleases({ pages: 1, request: shallow });
+  assert.equal(first.items.length, 2);
+  assert.equal(calls, 2);
+  const deepCalls = [];
+  const deep = async (signed) => {
+    const body = JSON.parse(signed.body.toString());
+    deepCalls.push({ genre: body.select_items.genre[0], offset: body.offset });
+    return body.offset === 0
+      ? page([row('7400000000000000001', '深页第一页')], true, 50)
+      : page([row('7400000000000000002', '深页第二页')], false, 0);
+  };
+  const second = await listNewReleases({ pages: 2, request: deep });
+  assert.equal(deepCalls.length, 4, 'a two-page request must not be served by a one-page cache');
+  assert.deepEqual(second.items.map(item => item.series_id).sort(), ['7400000000000000001', '7400000000000000002']);
+  clearNewReleaseCache();
 });

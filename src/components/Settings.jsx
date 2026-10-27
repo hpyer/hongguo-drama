@@ -213,11 +213,11 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
       <section className="settings-card" aria-label="外观设置"><AppearanceSettings /></section>
       <ShortcutSettings active={active} />
       <CustomSources active={active} />
-      <p className="settings-hint">播放页顶部可开启隐身小窗。鼠标移开时暂停隐藏，移回继续；Esc 或 Dock 可恢复主窗口。</p>
+      <p className="settings-hint">播放页顶部可开启小窗模式：窗口缩小、置顶并在支持的系统上跨虚拟桌面可见；鼠标移开时暂停隐藏，移回继续，Esc 或 Dock 可恢复主窗口。</p>
       <fieldset className="settings-card" disabled={saving}>
         <div className="settings-group">
           <span className="settings-label">播放与缓存</span>
-          <label className="proxy-switch-row"><input type="checkbox" checked={settings.cache_next_episode !== false} onChange={event => update('cache_next_episode', event.target.checked)} /><span className="proxy-switch-text">缓存下一集<em>开始播放后预缓存下一集，减少切集等待；会使用网络流量。</em></span></label>
+          <label className="proxy-switch-row"><input type="checkbox" checked={settings.cache_next_episode !== false} onChange={event => update('cache_next_episode', event.target.checked)} /><span className="proxy-switch-text">缓存后续 2 集<em>开始播放后最多预取接下来两集可在线播放的分集，减少连续切集等待；会使用网络流量。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.compat_mode !== false} onChange={event => update('compat_mode', event.target.checked)} /><span className="proxy-switch-text">自动兼容模式<em>无法解码时尝试转码播放，解决部分黑屏有声问题。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.auto_delete_watched === true} onChange={event => update('auto_delete_watched', event.target.checked)} /><span className="proxy-switch-text">看完自动删除<em>看完一集后删除该集已下载的视频、在线播放缓存和转码缓存。下载文件会永久删除；需要时可重新下载。保存后生效。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" aria-label="启用红果 App 搜索" checked={settings.search_app_enabled === true} onChange={event => update('search_app_enabled', event.target.checked)} /><span className="proxy-switch-text">实验：红果 App 搜索<em>优先使用 App 搜索接口，失败或空结果自动回退官网；接口可能受上游风控影响。</em></span></label>

@@ -183,7 +183,7 @@ export default function App() {
           {page === 'player' && layout === 'portrait' && <PageMenu items={MENU} page={page} onNavigate={navigate} />}
           <div className="toolbar-actions">
             <span className="toolbar-caption">{appInfo?.preview ? '功能预览' : '红果短剧'}</span>
-            {page === 'player' && <button className="btn btn-outline btn-sm" onClick={() => { setEpisodesOpen(false); toggleStealth(true); }} title="鼠标移开时暂停隐藏，移回继续；Esc 退出">隐身小窗</button>}
+            {page === 'player' && <button className="btn btn-outline btn-sm" onClick={() => { setEpisodesOpen(false); toggleStealth(true); }} title="小窗置顶播放并在支持的系统上跨虚拟桌面可见；鼠标移开时暂停隐藏，移回继续；Esc 退出">小窗模式</button>}
             {page === 'player' && layout === 'portrait' && <button className="btn btn-outline btn-sm portrait-episodes-toggle" aria-expanded={episodesOpen}
               aria-controls="player-episode-panel" onClick={() => setEpisodesOpen(open => !open)}>{episodesOpen ? '收起选集' : '选集'}</button>}
             {page === 'player' && <button className="btn btn-outline btn-sm player-actions-toggle" aria-pressed={actionsHidden || borderless && layout === 'portrait'}
