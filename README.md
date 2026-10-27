@@ -23,9 +23,31 @@
 
 ## 下载与安装
 
-**当前源码／发行目标：4.0**（内部 `4.0.0`，计划标签 `v4.0`），尚未正式发布。本轮纳入远程公告全部功能及搜索 #60 的官网故障回退。已有 179 项单元测试、91 项平台检查和本机 arm64 4.0 测试包通过记录；GitHub 三端正式构建与 Mac 公证已获授权，正式签名、公证、安装和发布仍待执行，latest 仍为 3.9；下表继续提供 3.9 下载。范围和验证边界见 [4.0 说明](docs/release-4.0.md)。
+**当前正式版：4.0**（内部 `4.0.0`）。新增普通／紧急远程公告、独立永久关闭、手动查看及邮箱点击复制；官网搜索故障时自动尝试 App 搜索。Mac 已签名、公证和装订，Windows EXE 未签名。详见 [4.0 说明](docs/release-4.0.md)。
 
-**当前正式版：3.9**（内部 `3.9.0`）。恢复 App 取流、播放与下载，完善当天新剧补搜、后续两集预取、系统画中画及小窗模式。Mac 已签名、公证；Windows EXE 未签名。三端发行与验收回执见 [3.9 说明](docs/release-3.9.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
+
+
+| 设备 | 下载 4.0 | 安装方式 |
+|---|---|---|
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/Hongguo-4.0-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/Hongguo-4.0-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.0 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.0) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/SHA256SUMS.txt)
+
+- **升级到 4.0**：3.9 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
+- **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
+- **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
+- **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
+- **普通使用只需上表安装文件**：Assets 中的 Mac 更新 ZIP、`latest*.yml` 和 `.blockmap` 供更新程序使用；`source` 文件和 GitHub 自动生成的 Source code 是源码，不能直接运行。
+
+本项目是社区维护的开源修改版，**不是红果、西饭或河马的官方客户端，也未获平台官方背书**。不提供付费分集解锁；剧集、清晰度和可用范围取决于来源平台。
+
+<details>
+<summary>3.9 历史下载与升级说明</summary>
+
+**历史正式版：3.9**（内部 `3.9.0`）。恢复 App 取流、播放与下载，完善当天新剧补搜、后续两集预取、系统画中画及小窗模式。Mac 已签名、公证；Windows EXE 未签名。三端发行与验收回执见 [3.9 说明](docs/release-3.9.md)。按设备下载一个文件即可，无需另装 Node.js、Homebrew 或 FFmpeg。
 
 | 设备 | 下载 3.9 | 安装方式 |
 |---|---|---|
@@ -34,15 +56,11 @@
 | Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.9/hongguo-downloader-3.9-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
 | Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v3.9/hongguo-downloader-3.9-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v3.9/hongguo-downloader-3.9-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [3.9 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.9) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.9/SHA256SUMS.txt)
+[3.9 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v3.9) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v3.9/SHA256SUMS.txt)
 
 - **升级到 3.9**：3.8 安装版可通过应用内更新升级；1.75 及更早版本仍需手动安装一次。退出旧程序后替换 Mac 应用或运行 Windows 安装包；便携版升级时保留同目录的 `data`，并保留原系统资料目录作为迁移备份。
-- **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
-- **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
-- **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
-- **普通使用只需上表安装文件**：Assets 中的 Mac 更新 ZIP、`latest*.yml` 和 `.blockmap` 供更新程序使用；`source` 文件和 GitHub 自动生成的 Source code 是源码，不能直接运行。
 
-本项目是社区维护的开源修改版，**不是红果、西饭或河马的官方客户端，也未获平台官方背书**。不提供付费分集解锁；剧集、清晰度和可用范围取决于来源平台。
+</details>
 
 ## 开始使用
 
@@ -51,9 +69,9 @@
 3. 打开详情点「立即播放」，也可选择集数与清晰度加入下载队列。
 4. 下次从「我的剧库」或「观看记录」接着看；下载进度、失败重试和整剧合并在「下载管理」。
 
-## 4.0 远程公告与搜索修复目标（未发布）
+## 4.0 远程公告与搜索故障回退
 
-以下为 4.0 交付范围；本机测试包已通过，正式三端发行验收待执行：
+4.0 已正式发布，包含以下功能；验证范围见 [4.0 说明](docs/release-4.0.md)。
 
 - 普通、紧急远程公告各有独立关闭开关，升级后保留；自动提醒关闭时不读取对应通道。公告显示 30 秒自动收起，关闭当前弹窗不改变免提醒偏好。
 - 普通公告正文已说明：可在「设置 → 公告通知」永久关闭普通或紧急公告，软件升级后仍保持关闭；需要时可点击「查看当前公告」手动查看。
@@ -491,7 +509,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-4.0（内部 `4.0.0`）仍为源码／发行目标。主控记录 179 项单元测试、91 项平台检查通过，本机 arm64 测试包确认版本、邮箱复制与“接班”搜索；本次文档校准不重复执行这些测试。GitHub 三端构建与 Mac 公证已获授权，正式发行回执仍待执行后补充。以下 3.9 及更早版本历史保持原样。
+4.0（内部 `4.0.0`）已于 2026-10-27 18:07（Asia/Shanghai）正式发布，标签 `v4.0`。冻结源码 `c8d9acb61ea8c4b2ca8df543b94ac0d56fdd3451`；三端 16 项附件的远端 SHA256 与大小逐项匹配。双 Mac App 与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订，只读挂载验证通过。Windows CI 40484301307 的便携媒体、安装、重装及真实 1.80 升级资料保留检查通过；EXE 未签名。 已有回归记录：179 项单元测试、91 项平台检查通过。x64 包在 Rosetta 下启动并显示 4.0；本机已安装签名、公证并装订的 arm64 4.0，安装期间资料不变，包内源码匹配，已确认最新邮箱复制成功及永久关闭公告正文显示。 本轮未重做真实两集下载或完整在线播放，不沿用 3.9 的真实播放与人工听音证据。Windows 媒体检查使用 CI 测试素材；未覆盖实体 Intel Mac、实体 Windows、干净 Gatekeeper、长期播放及完整应用内跨版本更新。 详细回执见 [4.0 说明](docs/release-4.0.md)。以下 3.9 及更早版本历史保持原样。
 
 3.9（内部 `3.9.0`）已于 2026-10-27 14:15（Asia/Shanghai）正式发布，标签 `v3.9`。冻结源码 `4a88f2ea597101a5c2e92f2ab564afee9c5167e0`；三端 16 项附件的远端 SHA256 与大小逐项匹配。双 Mac App 与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订。Windows CI 40458538824 的便携播放、安装、重装与真实 1.80 升级资料保留通过；EXE 未签名。 真实两集下载、播放和切集通过，声音由用户确认正常；本机已安装正式签名包。验证细节和未验范围见 [3.9 说明](docs/release-3.9.md)。
 
@@ -515,7 +533,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 本版不宣称修复批量下载黑屏或闪退反馈；相关问题仍需要对应设备与复现场景核实。
 
-**尚未覆盖**：实体 Intel Mac、实体 Windows、启用 Gatekeeper 的干净系统、完整应用内更新流程及长期播放；没有覆盖本机正式安装。 也未覆盖全部显卡与 Windows 真实网络弹幕；云端检查和公证不能代替所有设备与网络环境的实测。
+**4.0 验证边界**：本轮未重做真实两集下载或完整在线播放，不沿用 3.9 的真实播放与人工听音证据。Windows 媒体检查使用 CI 测试素材；未覆盖实体 Intel Mac、实体 Windows、干净 Gatekeeper、长期播放及完整应用内跨版本更新。
 
 <details>
 <summary>历史版本与旧版升级提示</summary>
