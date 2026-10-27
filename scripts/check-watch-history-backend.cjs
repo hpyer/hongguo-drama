@@ -29,7 +29,9 @@ function load(sid, { partial = false } = {}) {
     if (!result.success) throw new Error(result.error || 'fixture offline');
     return { results: result.results || [], total: (result.results || []).length, page: 1, totalPages: 1, hasMore: false };
   } };
-  const overrides = { electron, './src/store': store, './src/native/hongguo': { fetchEpisodeList: async () => current }, './src/native/hongguo-search': hongguoSearch, './src/native/xifan': { search: search('xifan') }, './src/native/hema': { search: search('hema') } };
+  const overrides = { electron, './src/store': store, './src/native/hongguo': { fetchEpisodeList: async () => current }, './src/native/hongguo-search': hongguoSearch,
+    './src/native/hongguo-app-search': { searchApp: async () => { throw new Error('fixture App search unavailable'); } },
+    './src/native/xifan': { search: search('xifan') }, './src/native/hema': { search: search('hema') } };
   const context = vm.createContext({ require: name => overrides[name] || req(name), __dirname: path.dirname(source), process, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   require('./fixtures/trusted-ipc.cjs')(context, handlers);

@@ -5,6 +5,7 @@ import './Settings.css';
 import AppearanceSettings from './AppearanceSettings';
 import ShortcutSettings from './ShortcutSettings';
 import CustomSources from './CustomSources';
+import AnnouncementSettings from './AnnouncementSettings';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 
@@ -220,7 +221,7 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.cache_next_episode !== false} onChange={event => update('cache_next_episode', event.target.checked)} /><span className="proxy-switch-text">缓存后续 2 集<em>开始播放后最多预取接下来两集可在线播放的分集，减少连续切集等待；会使用网络流量。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.compat_mode !== false} onChange={event => update('compat_mode', event.target.checked)} /><span className="proxy-switch-text">自动兼容模式<em>无法解码时尝试转码播放，解决部分黑屏有声问题。</em></span></label>
           <label className="proxy-switch-row"><input type="checkbox" checked={settings.auto_delete_watched === true} onChange={event => update('auto_delete_watched', event.target.checked)} /><span className="proxy-switch-text">看完自动删除<em>看完一集后删除该集已下载的视频、在线播放缓存和转码缓存。下载文件会永久删除；需要时可重新下载。保存后生效。</em></span></label>
-          <label className="proxy-switch-row"><input type="checkbox" aria-label="启用红果 App 搜索" checked={settings.search_app_enabled === true} onChange={event => update('search_app_enabled', event.target.checked)} /><span className="proxy-switch-text">实验：红果 App 搜索<em>优先使用 App 搜索接口，失败或空结果自动回退官网；接口可能受上游风控影响。</em></span></label>
+          <label className="proxy-switch-row"><input type="checkbox" aria-label="优先使用红果 App 搜索" checked={settings.search_app_enabled === true} onChange={event => update('search_app_enabled', event.target.checked)} /><span className="proxy-switch-text">优先使用红果 App 搜索<em>失败或空结果自动回退官网；关闭此项时，官网不可用仍会尝试 App 备用搜索。</em></span></label>
         </div>
         <div className="settings-group">
           <span className="settings-label">弹幕按钮设置</span>
@@ -364,6 +365,8 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
           <p className="settings-hint">可重新打开已关闭的更新提醒、查看下载进度或安装已下载的新版。关闭检测后需重新开启并保存。</p>
         </div>
         </>}
+
+        {!preview && <AnnouncementSettings />}
 
         <div className="settings-footer">
           {dirty && <span className="settings-hint" role="status">有未保存的修改</span>}

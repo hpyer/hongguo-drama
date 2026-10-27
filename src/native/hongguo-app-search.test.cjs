@@ -1,7 +1,19 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { searchApp, parseSearchPayload } = require('./hongguo-app-search');
-const { signedSearchRequest } = require('./app-source');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire, wrap } = require('node:module');
+const { signedSearchRequest: signSearch } = require('./app-source');
+const identity = Object.freeze({ device_id: '7000000000000000001', iid: '7000000000000000002', cdid: '00000000-0000-4000-8000-000000000003' });
+const signedSearchRequest = options => signSearch({ ...options, identity });
+function loadSearch(getPlaybackDevice = async () => identity) {
+  const file = path.join(__dirname, 'hongguo-app-search.js'), req = createRequire(file), module = { exports: {} };
+  const run = vm.runInThisContext(wrap(fs.readFileSync(file, 'utf8')), { filename: file });
+  run(module.exports, name => name === './playback-device' ? { getPlaybackDevice } : req(name), module, file, __dirname);
+  return module.exports;
+}
+const { searchApp, parseSearchPayload } = loadSearch();
 
 const payload = {
   code: 0,
@@ -14,6 +26,31 @@ const payload = {
     ],
   }],
 };
+
+test('search and pagination sign with the registered identity instead of new random IDs', async () => {
+  let deviceLookups = 0;
+  const search = loadSearch(async requestJson => { assert.equal(typeof requestJson, 'function'); deviceLookups++; return identity; }).searchApp;
+  for (const page of [1, 2]) await search('测试短剧', { page, cursor: { search_id: 'sid-1', next_offset: (page - 1) * 20 }, request: async signed => {
+    const query = new URL(signed.url).searchParams;
+    assert.equal(query.get('device_id'), identity.device_id);
+    assert.equal(query.get('iid'), identity.iid);
+    assert.equal(query.get('cdid'), identity.cdid);
+    assert.ok(signed.headers['x-gorgon']); assert.ok(signed.headers['x-medusa']);
+    return payload;
+  } });
+  assert.equal(deviceLookups, 2, 'each search must obtain the process-shared registration');
+});
+
+test('registration failure never sends a search with an unregistered fallback identity', async () => {
+  const search = loadSearch(async () => { throw Object.assign(new Error('registration unavailable'), { code: 'DEVICE_REGISTRATION_FAILED' }); }).searchApp;
+  await assert.rejects(search('测试短剧', { request: async () => { assert.fail('search must not run after registration failure'); } }), error => error.code === 'DEVICE_REGISTRATION_FAILED');
+});
+
+test('search signing requires a valid registered identity', () => {
+  for (const value of [undefined, {}, { device_id: '0', iid: '0' }, { device_id: 9007199254740992, iid: '1' }]) {
+    assert.throws(() => signSearch({ keyword: '测试短剧', identity: value }), error => error.code === 'APP_INPUT');
+  }
+});
 
 test('App search parses titles, ids, covers and cursors', () => {
   const result = parseSearchPayload(payload);

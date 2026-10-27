@@ -39,6 +39,7 @@ const hongguoSearch = { searchHongguo: async keyword => {
 const context = vm.createContext({ require: name => name === 'electron' ? electron
   : name === './src/native/hongguo' ? native : name === './src/store' ? store
     : name === './src/native/hongguo-search' ? hongguoSearch
+      : name === './src/native/hongguo-app-search' ? { searchApp: async () => { throw new Error('fixture App search unavailable'); } }
       : name === './src/native/hongguo-app-new' ? { searchNewReleasesDetailed: async () => ({ results: [], partial: false }) } : req(name),
   __dirname: path.dirname(file), process, Buffer, URL, Response, Request, Headers, AbortController,
   setTimeout, clearTimeout, console: { log() {}, warn() {}, error() {} } });

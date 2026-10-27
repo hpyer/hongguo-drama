@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 3.7 下载器（独立版）主进程
+ * main.js - 红果短剧 4.0 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -53,6 +53,7 @@ const { searchHongguo } = require('./src/native/hongguo-search');
 const { fitWindowBounds, getWindowScale, saveWindowZoom } = require('./src/native/window-layout');
 const { createEpisodePanelController } = require('./src/native/episode-panel');
 const { availableRelease } = require('./src/native/app-update');
+const { createAnnouncementService } = require('./src/native/app-announcements');
 const { fetchPublicDetails } = require('./src/native/public-details');
 const { fetchEpisodeComments } = require('./src/native/episode-comments');
 const { fetchDanmaku, setDeviceIdentityFile } = require('./src/native/danmaku');
@@ -1589,13 +1590,13 @@ async function searchAtSourcePage(keyword, options = {}) {
   let appFallbackError = '';
   if (appEnabled) {
     try {
-      const appDeadline = Math.min(deadline || Date.now() + 3500, Date.now() + 3500);
+      const appDeadline = Math.min(deadline || Date.now() + 8000, Date.now() + 8000);
       const app = await require('./src/native/hongguo-app-search').searchApp(keyword, { page: 1, deadline: appDeadline });
       if (app.results.length && hasTitleMatch(app.results)) {
         appSearchCooldownUntil = 0;
         return { ...app, via: 'app', pageTitle: '', meta: { total: app.results.length, page: 1, hasMore: app.hasMore, relaxed: false } };
       }
-      appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
+      appSearchCooldownUntil = 0;
       appFallbackError = app.results.length ? 'App 搜索没有标题匹配' : 'App 搜索没有返回结果';
     } catch (error) {
       appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
@@ -1679,6 +1680,24 @@ async function searchAtSourcePage(keyword, options = {}) {
   } catch (error) {
     const message = error?.message || String(error || '搜索失败');
     console.warn('[Search] 红果接口失败:', message);
+    if (!appEnabled && options?.appSearch !== false && Date.now() >= appSearchCooldownUntil
+      && error?.kind !== 'input' && (!deadline || deadline - Date.now() >= 1000)) {
+      try {
+        const appDeadline = Math.min(deadline || Date.now() + 8000, Date.now() + 8000);
+        const app = await require('./src/native/hongguo-app-search').searchApp(keyword, { page: 1, deadline: appDeadline });
+        appSearchCooldownUntil = 0;
+        if (app.results.length) {
+          return { ...app, via: 'app', pageTitle: '', partial: true,
+            error: `官网搜索未完成：${message}；已自动切换 App 搜索`, apiError: message,
+            meta: { total: app.results.length, page: 1, hasMore: app.hasMore, relaxed: false } };
+        }
+        appFallbackError = 'App 搜索没有返回结果';
+      } catch (appError) {
+        appSearchCooldownUntil = Date.now() + APP_SEARCH_COOLDOWN_MS;
+        appFallbackError = appError?.message || 'App 搜索不可用';
+        console.warn('[Search] 官网失败后的 App 搜索也未完成:', appFallbackError);
+      }
+    }
     // 接口 5xx/结构变化时 App 上新列表仍可能可用，能补到当天新剧就不必只报错或空等页面嗅探。
     if (page === 1 && options?.fuzzy !== false && searchQuery.length >= 2) {
       const newRelease = await searchNewReleasesForSearch(keyword, { deadline });
@@ -4434,6 +4453,24 @@ ipcMain.handle('open-folder', async (event, taskId) => {
     }
   }
   return { success: false, error: '文件夹不存在' };
+});
+
+// ===== 远程公告：固定公共 JSON，普通和紧急偏好独立于 settings =====
+const appAnnouncements = createAnnouncementService({
+  store,
+  version: APP_VERSION,
+  request: (url, options) => axios.get(url, options),
+  isEnabled: () => !IS_PREVIEW && !proxyStartupFallback,
+});
+ipcMain.handle('check-announcements', (_event, options) => appAnnouncements.checkAnnouncements(options));
+ipcMain.handle('get-current-announcement', () => appAnnouncements.getCurrentAnnouncement());
+ipcMain.handle('acknowledge-announcement', (_event, payload) => appAnnouncements.acknowledgeAnnouncement(payload));
+ipcMain.handle('dismiss-announcement', (_event, payload) => appAnnouncements.dismissAnnouncement(payload));
+ipcMain.handle('get-announcement-preferences', () => appAnnouncements.getAnnouncementPreferences());
+ipcMain.handle('set-announcement-preferences', (_event, patch) => {
+  const result = appAnnouncements.setAnnouncementPreferences(patch);
+  if (result.success) sendToRenderer('announcement-preferences-changed', result.preferences);
+  return result;
 });
 
 // ===== 应用内更新：固定官方源，下载和重启均由用户确认 =====

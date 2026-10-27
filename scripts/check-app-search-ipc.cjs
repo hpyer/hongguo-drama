@@ -82,6 +82,45 @@ function load({ appEnabled = true, appSearch = unexpectedSearch, webSearch = une
   assert.equal(disabled.channel, 'web');
   h3.cleanup();
 
+  for (const status of [503, 502]) {
+    let webRequests = 0;
+    const appRequests = [];
+    const fixture = load({
+      appEnabled: false,
+      webSearch: async () => { webRequests++; throw Object.assign(new Error(`搜索服务暂不可用（HTTP ${status}）`), { kind: 'upstream' }); },
+      appSearch: async (keyword, options) => {
+        appRequests.push(options);
+        return { success: true, channel: 'app', page: options.page, hasMore: options.page === 1,
+          cursor: { search_id: 'fallback-search', next_offset: 20 }, results: [{ series_id: '8000001', series_title: keyword }] };
+      },
+    });
+    try {
+      const first = await fixture.handlers['search-series']({}, '接班', { source: 'hongguo' });
+      assert.equal(first.success, true, `HTTP ${status} must automatically recover through App search`);
+      assert.equal(first.channel, 'app'); assert.equal(first.partial, true);
+      assert.match(first.apiError, new RegExp(String(status)));
+      const beforeMore = { webRequests, appRequests: appRequests.length };
+      const more = await fixture.handlers['search-series-more']({}, '接班', { source: 'hongguo', channel: first.channel, page: 2, cursor: first.cursor });
+      assert.equal(more.success, true); assert.equal(webRequests, beforeMore.webRequests);
+      assert.equal(appRequests.length, beforeMore.appRequests + 1); assert.equal(appRequests.at(-1).page, 2);
+      assert.equal(appRequests.at(-1).cursor.search_id, 'fallback-search');
+    } finally { fixture.cleanup(); }
+  }
+
+  {
+    let appRequests = 0;
+    const fixture = load({
+      appSearch: async keyword => { appRequests++; return { success: true, channel: 'app', results: keyword === '缺席第一季' ? [] : [{ series_id: '8000002', series_title: keyword }], hasMore: false }; },
+      webSearch: async keyword => ({ results: [{ series_id: '8000003', series_title: keyword }], page: 1, hasMore: false }),
+    });
+    try {
+      await fixture.handlers['search-series']({}, '缺席第一季', { source: 'hongguo' });
+      const second = await fixture.handlers['search-series']({}, '接班第一季', { source: 'hongguo' });
+      assert.equal(second.channel, 'app', 'a valid empty result must not disable App search for other keywords');
+      assert.equal(appRequests, 2);
+    } finally { fixture.cleanup(); }
+  }
+
   {
     const calls = [];
     const fixture = load({

@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react';
 
 // Keep focus inside the currently open dialog and return it to its trigger.
-export default function useDialogKeyboard(open, close, selector) {
+export default function useDialogKeyboard(open, close, selector, root) {
   const closeRef = useRef(close);
   closeRef.current = close;
   useEffect(() => {
     if (!open) return;
     const trigger = document.activeElement;
-    const dialog = document.querySelector(selector);
+    const dialog = (root || document).querySelector(selector);
     if (!dialog) return;
     const controls = () => [...dialog.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')]
       .filter((element) => element.getClientRects().length > 0);
@@ -34,5 +34,5 @@ export default function useDialogKeyboard(open, close, selector) {
       document.removeEventListener('keydown', onKey);
       if (trigger?.isConnected) trigger.focus();
     };
-  }, [open, selector]);
+  }, [open, selector, root]);
 }

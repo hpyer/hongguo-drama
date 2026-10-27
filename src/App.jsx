@@ -11,6 +11,7 @@ import { initializeTheme } from './theme';
 import useStealthWindow from './components/useStealthWindow';
 import './components/StealthWindow.css';
 import AppUpdateNotice from './components/AppUpdateNotice';
+import AnnouncementNotice from './components/AnnouncementNotice';
 import DramaFeed from './components/DramaFeed';
 import ReleaseCalendar from './components/ReleaseCalendar';
 
@@ -220,6 +221,7 @@ export default function App() {
           })}
         </nav>
         {!appInfo?.preview && <AppUpdateNotice />}
+        {!appInfo?.preview && <AnnouncementNotice />}
         {stealthMode && <div className="stealth-toolbar"><span>移开暂停隐藏 · 移回继续</span><button className="btn btn-outline btn-sm" onClick={() => toggleStealth(false)}>退出小窗</button></div>}
         {stealthError && <div className="app-storage-error" role="alert">{stealthError}</div>}
         {storageError && <div className="app-storage-error" role="alert"><span>{storageError}</span><button className="btn btn-outline btn-sm" onClick={() => setStorageError('')}>关闭提示</button></div>}

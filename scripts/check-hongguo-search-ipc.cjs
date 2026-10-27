@@ -24,6 +24,7 @@ function load(searchHongguo) {
     electron,
     './src/store': { getSettings: () => ({}) },
     './src/native/hongguo-search': { searchHongguo },
+    './src/native/hongguo-app-search': { searchApp: async () => { throw Object.assign(new Error('fixture App search unavailable'), { code: 'APP_EMPTY' }); } },
     './src/native/hongguo-app-new': { searchNewReleasesDetailed: async () => ({ results: [], partial: false }) },
     './src/native/hongguo': { fetchEpisodeList: async () => ({ episodes: [] }) },
   };

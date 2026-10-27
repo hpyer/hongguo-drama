@@ -141,12 +141,16 @@ function parseSearchInteger(value) {
     const number = Number(value);
     return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
-function signedSearchRequest({ keyword, page = 1, cursor = null } = {}) {
+function signedSearchRequest({ keyword, page = 1, cursor = null, identity } = {}) {
     const pg = parseSearchInteger(page);
     if (pg === null || pg < 1 || pg > 50) throw Object.assign(new Error('App 搜索页码需为 1 至 50 的整数'), { code: 'APP_INPUT' });
+    if (![identity?.device_id, identity?.iid].every(value => typeof value === 'string' && /^\d{1,30}$/.test(value) && /[1-9]/.test(value))
+        || typeof identity?.cdid !== 'string' || !/^[a-f0-9-]{36}$/i.test(identity.cdid)) {
+        throw Object.assign(new Error('App 搜索设备身份无效'), { code: 'APP_INPUT' });
+    }
     // Search uses the hongguoTV 7.2.2.32 profile and only hash branch 0.
     const device = { ...DEVICE, version_code: '72232', version_name: '7.2.2.32', manifest_version_code: '72232',
-        update_version_code: '72232', pv_player: '72232', iid: localId(), device_id: localId() };
+        update_version_code: '72232', pv_player: '72232', iid: identity.iid, device_id: identity.device_id, cdid: identity.cdid };
     const khronos = Math.floor(Date.now() / 1000), ticketBase = Date.now();
     const base = { ...device, query: String(keyword || '').slice(0, 80), count: '20', tab_type: '11',
         bookshelf_search_plan: '4', use_correct: 'true', user_is_login: '0' };

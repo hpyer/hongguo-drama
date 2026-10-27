@@ -75,8 +75,9 @@ async function check(name, fn) { try { await fn(); } catch (error) { failures.pu
     }
     assert.equal(win.openHandler?.({ url: 'https://evil.invalid/' }).action, 'deny');
   });
-  await check('external links limited to web schemes', async () => {
-    for (const url of ['file:///tmp/hostile', 'javascript:alert(1)', 'custom-app:run', 'https://user:secret@example.com/']) {
+  await check('external links remain limited to web schemes; email is copied inside the app', async () => {
+    for (const url of ['file:///tmp/hostile', 'javascript:alert(1)', 'custom-app:run', 'https://user:secret@example.com/',
+      'mailto:other@example.com', 'mailto:jaoktom@outlook.com', 'mailto:jaoktom@outlook.com?attach=/private/file', 'mailto:jaoktom@outlook.com?body=test']) {
       assert.equal((await handlers['open-external-url'](event, url)).success, false, url);
     }
     assert.equal(opened.length, 0);

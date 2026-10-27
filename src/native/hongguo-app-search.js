@@ -1,8 +1,9 @@
-// Optional signed App search (hongguoTV reference) with website API fallback.
+// Registered, signed App search; the caller chooses website/new-release fallback.
 const { signedSearchRequest, parseSearchInteger, requestJson } = require('./app-source');
+const { getPlaybackDevice } = require('./playback-device');
 
 const SEARCH_TAB = 11;
-const DEFAULT_TIMEOUT_MS = 4000;
+const DEFAULT_TIMEOUT_MS = 8000;
 
 function appError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -30,7 +31,7 @@ async function defaultRequest(signed, deadline) {
     const code = error.code === 'ETIMEDOUT' || error.name === 'AbortError' || error.name === 'TimeoutError' ? 'APP_TIMEOUT'
       : /未返回有效数据|空响应/i.test(error.message) ? 'APP_EMPTY'
       : error.code || 'APP_NETWORK';
-    throw appError(code === 'APP_TIMEOUT' ? 'App 搜索超时，已回退官网' : 'App 搜索暂不可用，已回退官网', code);
+    throw appError(code === 'APP_TIMEOUT' ? 'App 搜索超时' : 'App 搜索暂不可用', code);
   }
 }
 
@@ -90,8 +91,10 @@ async function searchApp(keyword, { page = 1, cursor = null, deadline = 0, reque
     throw appError('App 搜索游标已失效，请重新搜索', 'APP_CURSOR');
   }
   const budget = Number(deadline) > 0 ? deadline : Date.now() + DEFAULT_TIMEOUT_MS;
-  if (budget <= Date.now()) throw appError('App 搜索超时，已回退官网', 'APP_TIMEOUT');
-  const signed = signedSearchRequest({ keyword: kw, page: pg, cursor });
+  if (budget <= Date.now()) throw appError('App 搜索超时', 'APP_TIMEOUT');
+  const identity = await getPlaybackDevice(requestJson);
+  if (budget <= Date.now()) throw appError('App 搜索超时', 'APP_TIMEOUT');
+  const signed = signedSearchRequest({ keyword: kw, page: pg, cursor, identity });
   const payload = await request(signed, budget);
   return parseSearchPayload(payload, { page: pg });
 }

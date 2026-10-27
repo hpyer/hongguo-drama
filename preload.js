@@ -1,4 +1,4 @@
-// 红果短剧 3.9：桌面桥接入口，发行说明见 docs/release-3.9.md。
+// 红果短剧 4.0：桌面桥接入口，发行说明见 docs/release-4.0.md。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -12,6 +12,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('stealth-state', listener);
   },
   // 应用信息 / 官网链接
+  checkAnnouncements: options => ipcRenderer.invoke('check-announcements', options),
+  getCurrentAnnouncement: () => ipcRenderer.invoke('get-current-announcement'),
+  acknowledgeAnnouncement: payload => ipcRenderer.invoke('acknowledge-announcement', payload),
+  dismissAnnouncement: payload => ipcRenderer.invoke('dismiss-announcement', payload),
+  getAnnouncementPreferences: () => ipcRenderer.invoke('get-announcement-preferences'),
+  setAnnouncementPreferences: patch => ipcRenderer.invoke('set-announcement-preferences', patch),
+  onAnnouncementPreferences: cb => {
+    const listener = (_event, preferences) => cb(preferences);
+    ipcRenderer.on('announcement-preferences-changed', listener);
+    return () => ipcRenderer.removeListener('announcement-preferences-changed', listener);
+  },
   checkAppUpdate: () => ipcRenderer.invoke('check-app-update'),
   openAppUpdate: () => ipcRenderer.invoke('open-app-update'),
   getAppUpdateState: () => ipcRenderer.invoke('get-app-update-state'),
