@@ -23,20 +23,16 @@
 
 ## 下载与安装
 
-**当前正式版：4.0**（内部 `4.0.0`）。新增普通／紧急远程公告、独立永久关闭、手动查看及邮箱点击复制；官网搜索故障时自动尝试 App 搜索。Mac 已签名、公证和装订，Windows EXE 未签名。详见 [4.0 说明](docs/release-4.0.md)。
+**当前正式版：4.1**（内部 `4.1.0`）。新增内置来源全局开关：红果固定开启，西饭、河马可独立关闭，搜索与片单立即同步并跨重启保留；支持随视频下载导出弹幕、评论、剧评JSON。Mac已签名、公证和装订，Windows EXE未签名。详见 [4.1说明](docs/release-4.1.md)。
 
-**本分支发行目标：4.1**（内部 `4.1.0`，计划标签 `v4.1`），尚未正式发行。在 4.0 源码基础上增加随批量下载导出弹幕、分集评论与整剧剧评，修复实际文件路径、完成通知、提交选项、来源锁集和部分弹幕重试问题。整剧联网导出及定向验收已有记录；三端打包、签名、公证和统一发布已获明确授权，正在构建包含来源开关的新候选。功能、验证及贡献署名见 [4.1 说明](docs/release-4.1.md)。
-
-4.1 同时新增设置页「内置来源」全局开关：红果固定开启，西饭、河马可独立关闭；搜索、片单、推荐与摇一摇立即同步，重启后保留。
-
-| 设备 | 下载 4.0 | 安装方式 |
+| 设备 | 下载 4.1 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/Hongguo-4.0-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/Hongguo-4.0-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/hongguo-downloader-4.0-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/Hongguo-4.1-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/Hongguo-4.1-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/hongguo-downloader-4.1-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.0 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.0) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.0/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.0 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.0) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.1/SHA256SUMS.txt)
 
 - **升级到 4.0**：3.9 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
@@ -519,7 +515,7 @@ https://github.com/user-attachments/assets/b95f4f60-b57c-495f-a30e-62ac2b0bda11
 
 ## 版本与验证范围
 
-4.1（内部 `4.1.0`，计划标签 `v4.1`）仍待正式发行。整剧验证结果为 80 个视频 `completed`、合计 `241881712` 字节；弹幕 80 份、386 条，其中 3 份为空；评论 25 份、307 条；剧评 1 份、4 条。64 集评论复测取得 9 份、109 条，另 55 集由严格同剧 `pc_locked_episode` 同源校验判定为来源未开放，未生成空文件或误取其他集。来源锁集修复后原生测试 23 项及完整目标 UI 过滤 `HongguoDownload|text export` 12 项通过，包含来源未开放提示；网络与写盘实际失败为 0。旧 arm64 临时测试包早于最后修复，不作为正式包。三端打包、签名、公证及统一发布已获授权，尚未执行。详见 [4.1 说明](docs/release-4.1.md)。
+4.1（内部 `4.1.0`，标签 `v4.1`）已正式发布，包含内置来源全局开关与文字导出。文字导出候选阶段的整剧验证结果为 80 个视频 `completed`、合计 `241881712` 字节；弹幕 80 份、386 条，其中 3 份为空；评论 25 份、307 条；剧评 1 份、4 条。另 55 集评论本次来源未开放，未生成空文件或误取其他集，网络与写盘实际失败为 0。该整剧原始资料随旧工作区回收而丢失，数值来自此前已观察的聊天回执，不作为本轮重新下载或播放的证据。加入来源开关后重新构建三端，204 项单元、91 项平台检查、Windows 安装及升级检查通过；Mac 完成签名、公证及装订，16 项附件摘要与大小一致。详见 [4.1 说明](docs/release-4.1.md)。
 
 4.0（内部 `4.0.0`）已于 2026-10-27 18:07（Asia/Shanghai）正式发布，标签 `v4.0`。冻结源码 `c8d9acb61ea8c4b2ca8df543b94ac0d56fdd3451`；三端 16 项附件的远端 SHA256 与大小逐项匹配。双 Mac App 与 DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订，只读挂载验证通过。Windows CI 40484301307 的便携媒体、安装、重装及真实 1.80 升级资料保留检查通过；EXE 未签名。 已有回归记录：179 项单元测试、91 项平台检查通过。x64 包在 Rosetta 下启动并显示 4.0；本机已安装签名、公证并装订的 arm64 4.0，安装期间资料不变，包内源码匹配，已确认最新邮箱复制成功及永久关闭公告正文显示。 本轮未重做真实两集下载或完整在线播放，不沿用 3.9 的真实播放与人工听音证据。Windows 媒体检查使用 CI 测试素材；未覆盖实体 Intel Mac、实体 Windows、干净 Gatekeeper、长期播放及完整应用内跨版本更新。 详细回执见 [4.0 说明](docs/release-4.0.md)。以下 3.9 及更早版本历史保持原样。
 
