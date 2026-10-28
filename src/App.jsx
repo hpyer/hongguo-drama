@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Film, Download, Settings, Play, Home, Search, Clock } from './components/icons';
+import { Film, Download, Settings, Play, Home, Search, Clock, User } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import DownloadManager from './components/DownloadManager';
 import SettingsPage from './components/Settings';
@@ -14,6 +14,7 @@ import AppUpdateNotice from './components/AppUpdateNotice';
 import AnnouncementNotice from './components/AnnouncementNotice';
 import DramaFeed from './components/DramaFeed';
 import ReleaseCalendar from './components/ReleaseCalendar';
+import AccountManagement from './components/AccountManagement';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
@@ -23,6 +24,7 @@ const MENU = [
   { id: 'history', label: '观看记录', icon: Clock },
   { id: 'calendar', label: '收藏与上新', icon: Clock },
   { id: 'manager', label: '下载管理', icon: Download },
+  { id: 'account', label: '登录管理', icon: User },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 
@@ -119,6 +121,8 @@ export default function App() {
         }} />;
       case 'history':
         return <WatchHistory active={page === id} onNavigate={navigate} />;
+      case 'account':
+        return <AccountManagement active={page === id} />;
       case 'manager':
         return <DownloadManager active={page === id} onNavigate={navigate} />;
       case 'settings':
@@ -160,7 +164,7 @@ export default function App() {
         </div>
         <nav className="sidebar-menu">
           <div className="sidebar-group-label">内容</div>
-          {MENU.filter((item) => item.id !== 'settings').map((item) => {
+          {MENU.filter((item) => item.id !== 'settings' && item.id !== 'account').map((item) => {
             const Icon = item.icon;
             return (
               <button key={item.id} className={`sidebar-item ${page === item.id ? 'active' : ''}`}
@@ -171,6 +175,10 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-footer">
+          <button className={`sidebar-item ${page === 'account' ? 'active' : ''}`}
+            aria-current={page === 'account' ? 'page' : undefined} onClick={() => navigate('account')}>
+            <User size={19} /><span>登录管理</span>
+          </button>
           <button className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
             aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>
             <Settings size={19} /><span>设置</span>

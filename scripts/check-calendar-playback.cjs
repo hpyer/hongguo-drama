@@ -8,8 +8,8 @@ const { transformSync } = require('esbuild');
 const { mount: mountPlayer } = require('./check-player-resume.cjs');
 const appSource = transformSync(fs.readFileSync(path.join(__dirname, '../src/App.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-const playHandler = mainSource.slice(mainSource.indexOf("ipcMain.handle('play-series'"), mainSource.indexOf('// ===== 在线播放 ====='));
-assert.ok(playHandler.startsWith("ipcMain.handle('play-series'"), 'real playback IPC must be found');
+const playHandler = mainSource.slice(mainSource.indexOf('function navigateToPlayer'), mainSource.indexOf('// ===== 在线播放 ====='));
+assert.match(playHandler, /function navigateToPlayer[\s\S]*ipcMain\.handle\('play-series'/, 'real playback IPC must be found');
 
 function fixture({ exists = true, dismissed = false, saveError = '', resolveError = '', playError = '', missingMessage = '', resolveGate } = {}) {
   const registry = exists ? [{ series_id: 'A', dismissed, forgotten: dismissed }] : [];

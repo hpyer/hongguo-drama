@@ -18,10 +18,8 @@ function responseId(response, name) {
     return typeof value === 'string' && /^\d{1,30}$/.test(value) && /[1-9]/.test(value) ? value : '';
 }
 
-function getPlaybackDevice(requestJson) {
-    // Keep rejected promises too: prefetch and retries must not create more anonymous devices.
-    registration ||= Promise.resolve().then(async () => {
-        try {
+async function registerPlaybackDevice(requestJson) {
+    try {
             const now = Date.now();
             const cdid = crypto.randomUUID();
             const header = {
@@ -64,12 +62,16 @@ function getPlaybackDevice(requestJson) {
             const device_id = responseId(response, 'device_id');
             const iid = responseId(response, 'install_id');
             if (!device_id || !iid || Number(response?.code ?? response?.Code ?? 0) !== 0) throw new Error('Invalid registration');
-            return Object.freeze({ device_id, iid, cdid });
-        } catch (_) {
-            throw Object.assign(new Error('匿名播放设备注册失败，请重启应用后重试'), { code: 'DEVICE_REGISTRATION_FAILED' });
-        }
-    });
+        return Object.freeze({ device_id, iid, cdid });
+    } catch (_) {
+        throw Object.assign(new Error('匿名播放设备注册失败，请重启应用后重试'), { code: 'DEVICE_REGISTRATION_FAILED' });
+    }
+}
+
+function getPlaybackDevice(requestJson) {
+    // Keep rejected promises too: playback retries must not create more anonymous devices.
+    registration ||= Promise.resolve().then(() => registerPlaybackDevice(requestJson));
     return registration;
 }
 
-module.exports = { getPlaybackDevice };
+module.exports = { getPlaybackDevice, registerPlaybackDevice };

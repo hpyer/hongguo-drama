@@ -37,6 +37,11 @@ function pythonUrlEncode(values) {
     }).join('&');
 }
 function md5(value) { return crypto.createHash('md5').update(value).digest('hex').toUpperCase(); }
+function preserveLargeJsonIntegers(raw, fields) {
+    const names = fields.map(field => String(field).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const pattern = new RegExp(`("(?:${names})"\\s*:\\s*)(-?\\d{16,})(?=\\s*[,}\\]])`, 'g');
+    return raw.replace(pattern, '$1"$2"');
+}
 
 function u32(value) { return Number(value) >>> 0; }
 function rol32(value, count) { const n = count & 31; const x = u32(value); return u32((x << n) | (x >>> (32 - n))); }
@@ -207,6 +212,38 @@ function signedMetadataRequest(apiPath, values = {}, payload = null) {
     return { url, headers, body };
 }
 
+// Account reads use the registered device identity plus the website login cookie.
+function signedAccountRequest(apiPath, values = {}, identity) {
+    if (!['/reading/user/info/v1/', '/reading/bookapi/read_history/list/v1/', '/reading/bookapi/read_progress/list/v1/', '/reading/bookapi/multi-detail/v1/'].includes(apiPath)) {
+        throw new Error('不支持的账号接口');
+    }
+    if (![identity?.device_id, identity?.iid].every(value => typeof value === 'string' && /^\d{1,30}$/.test(value) && /[1-9]/.test(value))
+        || typeof identity?.cdid !== 'string' || !/^[a-f0-9-]{36}$/i.test(identity.cdid)) {
+        throw new Error('账号设备身份无效');
+    }
+    const device = { ...DEVICE, version_code: '72232', version_name: '7.2.2.32', manifest_version_code: '72232',
+        update_version_code: '72232', pv_player: '72232', iid: identity.iid, device_id: identity.device_id, cdid: identity.cdid };
+    const khronos = Math.floor(Date.now() / 1000), ticketBase = Date.now();
+    let query, url, requestTicket;
+    for (let n = 0; n < 128; n += 1) {
+        requestTicket = ticketBase + n;
+        query = pythonUrlEncode({ ...values, ...device, ts: String(khronos), _rticket: String(requestTicket) });
+        url = `https://api5-normal-sinfonlinea.fqnovel.com${apiPath}?${query}`;
+        if (branchOf(url, null, khronos) === 0) break;
+        if (n === 127) throw new Error('无法生成账号请求签名');
+    }
+    const headers = {
+        'User-Agent': SEARCH_UA, Accept: 'application/json; charset=utf-8,application/x-protobuf',
+        'x-ss-req-ticket': String(requestTicket), 'x-tt-request-tag': 't=0;n=0', 'sdk-version': '2',
+        'passport-sdk-version': '50561', 'x-xs-from-web': '0', 'x-khronos': String(khronos),
+        'x-ladon': be32(khronos).toString('base64'), 'x-argus': le32(khronos).toString('base64'),
+        'x-gorgon': xGorgon(query, null, khronos, Math.floor(Math.random() * 65536)),
+        'x-helios': helios(khronos),
+        'x-medusa': buildMedusa(url, null, khronos, device), 'x-tt-dt': '',
+    };
+    return { url, headers };
+}
+
 function parseFallback(value) {
     if (typeof value === 'string') { const parsed = jsonBody(value); return parsed?.fallback_api || value; }
     if (Array.isArray(value)) return str(value[0]);
@@ -262,6 +299,10 @@ function checkedUrl(value, domains) {
 
 async function requestJson(url, options, deadline, signal) {
     const axios = require('axios');
+    const preserveFields = Array.isArray(options?.preserveLargeIntegerFields)
+        ? options.preserveLargeIntegerFields : null;
+    const requestOptions = { ...options };
+    delete requestOptions.preserveLargeIntegerFields;
     for (let redirects = 0; redirects < 4; redirects++) {
         url = checkedUrl(url, ['fqnovel.com', 'snssdk.com']);
         const timeout = deadline - Date.now();
@@ -269,7 +310,7 @@ async function requestJson(url, options, deadline, signal) {
         let response;
         try {
             response = await axios({
-                ...options, url, timeout, signal, maxRedirects: 0,
+                ...requestOptions, url, timeout, signal, maxRedirects: 0,
                 responseType: 'text', transformResponse: [(data) => data],
                 maxContentLength: 2 * 1024 * 1024, maxBodyLength: 1024 * 1024,
                 validateStatus: () => true,
@@ -282,7 +323,7 @@ async function requestJson(url, options, deadline, signal) {
         }
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             // Do not resend a signed body to a redirect destination.
-            if (options.method === 'POST' || !response.headers.location) throw Object.assign(new Error('App 接口发生不支持的跳转'), { code: 'SECURITY_BLOCKED' });
+            if (requestOptions.method === 'POST' || !response.headers.location) throw Object.assign(new Error('App 接口发生不支持的跳转'), { code: 'SECURITY_BLOCKED' });
             url = checkedUrl(new URL(response.headers.location, url).href, ['fqnovel.com', 'snssdk.com']);
             continue;
         }
@@ -295,7 +336,8 @@ async function requestJson(url, options, deadline, signal) {
                 logid: response.headers?.['x-tt-logid'] || '',
             });
         }
-        const parsed = typeof response.data === 'string' ? jsonBody(raw) : response.data;
+        const normalized = preserveFields?.length ? preserveLargeJsonIntegers(raw, preserveFields) : raw;
+        const parsed = typeof response.data === 'string' ? jsonBody(normalized) : response.data;
         if (!parsed || typeof parsed !== 'object') throw Object.assign(new Error('App 接口未返回有效数据'), { code: 'INVALID_RESPONSE' });
         return parsed;
     }
@@ -389,4 +431,4 @@ async function fetchAppPlayUrl(vid, options = {}) {
         : Object.assign(new Error('本集片源地址或密钥无法解析'), { code: 'INVALID_RESPONSE' });
 }
 
-module.exports = { fetchAppPlayUrl, signedSearchRequest, signedMetadataRequest, parseSearchInteger, requestJson, SEARCH_API, SEARCH_UA };
+module.exports = { fetchAppPlayUrl, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, preserveLargeJsonIntegers, requestJson, SEARCH_API, SEARCH_UA };

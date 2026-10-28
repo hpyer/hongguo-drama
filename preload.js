@@ -1,4 +1,4 @@
-// 红果短剧 4.2：桌面桥接入口，发行说明见 docs/release-4.2.md。
+// 红果短剧 4.3：桌面桥接入口，发行说明见 docs/release-4.3.md。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -134,6 +134,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('watch-history-progress', listener);
     return () => ipcRenderer.removeListener('watch-history-progress', listener);
+  },
+
+  // 红果账号（网页扫码，只读同步 APP 观看记录）
+  getAccountStatus: () => ipcRenderer.invoke('get-account-status'),
+  startAccountLogin: () => ipcRenderer.invoke('start-account-login'),
+  pollAccountLogin: (loginId) => ipcRenderer.invoke('poll-account-login', loginId),
+  cancelAccountLogin: (loginId) => ipcRenderer.invoke('cancel-account-login', loginId),
+  logoutAccount: () => ipcRenderer.invoke('logout-account'),
+  getAccountHistory: (options) => ipcRenderer.invoke('get-account-history', options),
+  playAccountHistory: (seriesId) => ipcRenderer.invoke('play-account-history', seriesId),
+  onAccountUpdated: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('account-updated', listener);
+    return () => ipcRenderer.removeListener('account-updated', listener);
   },
 
   // 一键合并

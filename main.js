@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 4.2 下载器（独立版）主进程
+ * main.js - 红果短剧 4.3 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -8,7 +8,7 @@
  *   4. 下载管理：进度推送、暂停/取消、重试、删除、打开所在文件夹
  *   5. 设置：下载目录、命名规则、并发数（JSON 文件持久化）
  */
-const { app, BrowserWindow, ipcMain: rawIpcMain, dialog, shell, session, protocol, Menu, Notification, screen } = require('electron');
+const { app, BrowserWindow, ipcMain: rawIpcMain, dialog, shell, session, protocol, Menu, Notification, screen, safeStorage } = require('electron');
 const path = require('path');
 const IS_PREVIEW = require('./package.json').name === 'hongguo-experience-preview';
 if (IS_PREVIEW) {
@@ -48,6 +48,7 @@ const { normalizeDownloadQuality, meetsDownloadQuality } = require('./src/native
 const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const store = require('./src/store');
 const watchHistory = require('./src/native/watch-history');
+const { createAccountService, safeMessage: accountSafeMessage } = require('./src/native/account-session');
 const seriesSearch = require('./src/native/series-search');
 const { searchHongguo } = require('./src/native/hongguo-search');
 const { fitWindowBounds, getWindowScale, saveWindowZoom } = require('./src/native/window-layout');
@@ -668,6 +669,7 @@ function upsertSeriesRegistry(data) {
   if (idx === -1) seriesRegistry.unshift(entry);
   else seriesRegistry[idx] = { ...seriesRegistry[idx], ...entry, dismissed: false };
   saveSeriesRegistry();
+  return seriesRegistry.find(item => String(item.series_id) === sid);
 }
 
 /** 剧库可见的短剧（过滤掉被用户移除的） */
@@ -2499,9 +2501,27 @@ ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, curre
 });
 
 ipcMain.handle('get-playback-position', async (event, seriesId) => {
+  const sid = String(seriesId);
+  const accountResume = accountResumePositions.get(sid);
+  if (accountResume) {
+    accountResumePositions.delete(sid);
+    return accountResume;
+  }
   const map = store.getPlayback() || {};
-  return map[String(seriesId)] || null;
+  return map[sid] || null;
 });
+
+function navigateToPlayer(payload) {
+  sendToRenderer('navigate', {
+    page: 'player',
+    payload: {
+      seriesId: payload?.seriesId ? String(payload.seriesId) : '',
+      vidIndex: Number(payload?.vidIndex) || 0,
+      resume: payload?.resume === true,
+    },
+  });
+  return { success: true };
+}
 
 /**
  * 从「浏览」页点播：切到播放页并选中该剧。
@@ -2516,11 +2536,7 @@ ipcMain.handle('play-series', async (event, payload) => {
     try { entry.dismissed = false; entry.forgotten = false; saveSeriesRegistry(); }
     catch (error) { entry.dismissed = true; entry.forgotten = wasForgotten; return { success: false, error: error.message }; }
   }
-  sendToRenderer('navigate', {
-    page: 'player',
-    payload: { seriesId: seriesId ? String(seriesId) : '', vidIndex: Number(vidIndex) || 0, resume: payload?.resume === true },
-  });
-  return { success: true };
+  return navigateToPlayer({ seriesId, vidIndex, resume: payload?.resume === true });
 });
 
 // ===== 在线播放 =====
@@ -3665,6 +3681,7 @@ let historyRefresh = null;
 const historyItemChecks = new Map();
 const historySequelPending = new Map();
 const historySequelCache = new Map();
+const accountResumePositions = new Map();
 const HISTORY_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 const HISTORY_COMPLETED_LOW_INTERVAL = 24 * 60 * 60 * 1000;
 const HISTORY_SEQUEL_INTERVAL = 24 * 60 * 60 * 1000;
@@ -3679,6 +3696,61 @@ const HISTORY_SCOPES = new Set(['all', 'latest', 'unfinished', 'skip-completed-l
 
 function historyRows() {
   return watchHistory.listHistory(seriesRegistry, store.getPlayback(), getCurrentSettings().watch_sequels_enabled !== false);
+}
+
+let accountService = null;
+let accountWebSession = null;
+function getAccountWebSession() {
+  accountWebSession ||= session.fromPartition('hongguo-account-login', { cache: false });
+  return accountWebSession;
+}
+
+async function clearAccountCookies() {
+  if (accountWebSession) await accountWebSession.clearStorageData({ storages: ['cookies'] });
+  const cookies = await session.defaultSession.cookies.get({});
+  await Promise.all(cookies
+    .filter(cookie => /(?:^|\.)hongguoduanju\.com$/i.test(String(cookie.domain || '')))
+    .map(async cookie => {
+      const host = String(cookie.domain || '').replace(/^\./, '');
+      if (!host) return;
+      try { await session.defaultSession.cookies.remove(`https://${host}${cookie.path || '/'}`, cookie.name); } catch {}
+    }));
+}
+
+function getAccountService() {
+  if (!accountService) {
+    clearAccountCookies().catch(error => console.warn('[Account] 清除旧登录 Cookie 失败:', error.message));
+    accountService = createAccountService({
+      filePath: path.join(app.getPath('userData'), 'account-session.bin'), safeStorage,
+      webRequest: accountWebRequest,
+      onAccountExpired: () => {
+        clearAccountCookies().catch(error => console.warn('[Account] 清除登录 Cookie 失败:', error.message));
+        sendToRenderer('account-updated', { signedIn: false });
+      },
+    });
+  }
+  return accountService;
+}
+
+async function accountWebRequest(url, options = {}) {
+  const response = await getAccountWebSession().fetch(url, {
+    method: options.method || 'GET', headers: options.headers || {}, redirect: 'manual',
+    signal: AbortSignal.timeout(12000),
+  });
+  const headers = {};
+  for (const [name, value] of response.headers) headers[name] = value;
+  const cookies = response.headers.getSetCookie?.();
+  if (cookies?.length) headers['set-cookie'] = cookies;
+  return { status: response.status, headers, data: await response.text() };
+}
+
+async function accountAction(action) {
+  try { return await action(getAccountService()); }
+  catch (error) {
+    const message = accountSafeMessage(error);
+    console.warn('[Account]', message);
+    return { success: false, error: message };
+  }
 }
 
 function historyOptions(value) {
@@ -3944,6 +4016,70 @@ ipcMain.handle('acknowledge-watch-updates', async (_event, seriesId, snapshot) =
     sendToRenderer('watch-history-updated', {});
     return { success: true };
   } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-account-status', async () => accountAction(service => service.status()));
+ipcMain.handle('start-account-login', async () => {
+  await clearAccountCookies();
+  return accountAction(service => service.startLogin());
+});
+ipcMain.handle('poll-account-login', async (_event, loginId) => {
+  const result = await accountAction(service => service.pollLogin(String(loginId || '')));
+  if (!result.success) await clearAccountCookies();
+  if (result.status === 'signed-in') sendToRenderer('account-updated', { signedIn: true });
+  return result;
+});
+ipcMain.handle('cancel-account-login', async (_event, loginId) => {
+  const result = await accountAction(service => service.cancelLogin(String(loginId || '')));
+  await clearAccountCookies();
+  return result;
+});
+ipcMain.handle('logout-account', async () => {
+  const result = await accountAction(service => service.logout());
+  if (result.success) {
+    await clearAccountCookies();
+    sendToRenderer('account-updated', { signedIn: false });
+  }
+  return result;
+});
+ipcMain.handle('get-account-history', async (_event, options) => accountAction(service => service.history({ refresh: options?.refresh === true })));
+ipcMain.handle('play-account-history', async (_event, seriesId) => {
+  try {
+    const sid = String(seriesId || '');
+    if (!/^\d{1,30}$/.test(sid)) return { success: false, error: 'APP 观看记录编号无效' };
+    const service = getAccountService();
+    let row = service.row(sid);
+    if (!row) {
+      const refreshed = await service.refreshHistory();
+      if (!refreshed.success) return refreshed;
+      row = service.row(sid);
+    }
+    if (!row) return { success: false, error: 'APP 观看记录已变化，请刷新后重试' };
+    let entry = seriesRegistry.find(item => String(item.series_id) === sid);
+    if (!entry) {
+      const data = await hongguo.fetchEpisodeList(sid);
+      entry = upsertSeriesRegistry(data);
+    }
+    if (!entry || !entry.episodes?.length) return { success: false, error: '暂时无法读取这部剧的分集' };
+    const episode = entry.episodes.find(item => String(item.vid) === String(row.episode_id))
+      || (row.vid_index > 0 ? entry.episodes.find(item => Number(item.vid_index) === row.vid_index) : null);
+    if (!episode) return { success: false, error: 'APP 进度对应的分集已变化，请先在 APP 中重新打开这部剧' };
+    if (episode.locked) return { success: false, error: 'APP 进度对应的分集暂不可播放' };
+    if (entry.dismissed) {
+      entry.dismissed = false;
+      entry.forgotten = false;
+      saveSeriesRegistry();
+    }
+    accountResumePositions.set(sid, {
+      vid_index: Number(episode.vid_index),
+      currentTime: Math.max(0, Number(row.currentTime) || 0),
+      updatedAt: Number(row.updatedAt) || Date.now(),
+    });
+    return navigateToPlayer({ seriesId: sid, vidIndex: episode.vid_index, resume: true });
+  } catch (error) {
+    accountResumePositions.delete(String(seriesId || ''));
+    return { success: false, error: accountSafeMessage(error, '打开 APP 观看记录失败') };
+  }
 });
 
 // ===== IPC：设置 =====
