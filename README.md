@@ -23,18 +23,18 @@
 
 ## 下载与安装
 
-**当前正式版：4.2**（内部 `4.2.0`）。修复合集导出把1080P分集压成480P的问题：快速与兼容合并按各段原分辨率拼接，高质量模式在合并前检查实际文件是否全部达到1080P。Mac已签名、公证和装订，Windows EXE未签名。详见 [4.2说明](docs/release-4.2.md)。
+**当前正式版：4.3**（内部 `4.3.0`）。新增独立登录管理、手机红果 App 扫码登录、最近 50 部 APP 观看记录和对应分集续播。Mac 已签名、公证和装订，Windows EXE 未签名。详见 [4.3说明](docs/release-4.3.md)。
 
-| 设备 | 下载 4.2 | 安装方式 |
+| 设备 | 下载 4.3 | 安装方式 |
 |---|---|---|
-| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/Hongguo-4.2-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/Hongguo-4.2-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
-| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/hongguo-downloader-4.2-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
-| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/hongguo-downloader-4.2-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/hongguo-downloader-4.2-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
+| Apple 芯片 Mac（M 系列），macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/Hongguo-4.3-mac-arm64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Intel Mac，macOS 13+ | [下载 DMG](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/Hongguo-4.3-mac-x64.dmg) | 打开 DMG，拖入「应用程序」后启动；后续支持应用内更新 |
+| Windows x64（推荐安装版） | [下载安装版 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/hongguo-downloader-4.3-win-x64-setup.exe) | 按向导安装，后续支持应用内更新 |
+| Windows x64（便携版） | [下载便携 EXE](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/hongguo-downloader-4.3-win-x64.exe) · [下载便携 ZIP](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/hongguo-downloader-4.3-win-x64.zip) | 直接运行 EXE；ZIP 解压后运行同一程序，后续仍需手动替换 |
 
-[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.2 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.2) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.2/SHA256SUMS.txt)
+[查看最新正式版](https://github.com/jackotom/hongguo-drama/releases/latest) · [4.3 更新说明与源码](https://github.com/jackotom/hongguo-drama/releases/tag/v4.3) · [SHA256 校验文件](https://github.com/jackotom/hongguo-drama/releases/download/v4.3/SHA256SUMS.txt)
 
-- **升级到 4.2**：4.1 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
+- **升级到 4.3**：4.2 安装版可使用应用内更新；也可退出旧程序后替换 Mac 应用或运行 Windows 安装包。便携版保留同目录的 `data` 后手动替换；1.75 及更早版本需要手动安装。
 - **后续更新**：Mac 与 Windows 安装版可在应用内下载新版，下载完成后由你点击重启安装，不强制升级。Windows 便携版继续通过发行页下载并手动替换。
 - **Mac**：正式包的 Developer ID 签名、Apple 公证和票据装订状态见本版发行页。无需全局关闭 Gatekeeper；公证不等于 App Store 审核或内容授权。
 - **Windows**：安装版和便携版 EXE 尚未签名，可能出现系统安全提示。请核对官方下载来源；便携版首次启动会展开临时运行文件。安装版沿用原用户资料目录；3.4 起便携版把设置和下载记录放在程序目录的 `data` 文件夹，移动程序时请连同该文件夹一起保留。安装版与便携版不能同时运行（同一应用只允许一个实例）；更换版本前请先退出正在运行的窗口。
@@ -69,7 +69,7 @@
 
 ## 4.3 登录管理与 APP 观看记录
 
-源码候选 4.3 在「设置」上方新增独立「登录管理」。使用手机红果 App 扫描网页登录二维码，登录后可读取当前账号最近 50 部 APP 观看记录，并按剧名搜索。只有从登录管理页点击记录才会进入播放器；原「观看记录」仍只显示本机记录。
+4.3 在「设置」上方新增独立「登录管理」。使用手机红果 App 扫描网页登录二维码，登录后可读取当前账号最近 50 部 APP 观看记录，并按剧名搜索。只有从登录管理页点击记录才会进入播放器；原「观看记录」仍只显示本机记录。
 
 登录态使用系统安全存储加密，和普通设置、观看历史及备份分开保存。本版不上传本机历史，也不把 APP 记录批量导入本机。外部账号扫码和真实记录映射仍需实机验收，详见 [4.3说明](docs/release-4.3.md)。
 
