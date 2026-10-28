@@ -97,6 +97,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const [playbackRequested, setPlaybackRequested] = useState(false);
   const [compatCache, setCompatCache] = useState({ files: 0, bytes: 0 });
   const [mergeAsk, setMergeAsk] = useState(false);            // 合并格式选择
+  const [mergeError, setMergeError] = useState('');
 
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -105,6 +106,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const playbackRateRef = useRef(1);
   const toastTimer = useRef(null);
   const rateNoticeTimer = useRef(null);
+  const mergeRequestRef = useRef(false);
+  const mergeDialogGenerationRef = useRef(0);
   const pendingSeekRef = useRef(0); // 切集后要跳转的秒数
   const pendingAutoplayRef = useRef(false);
   const activeRef = useRef(active);
@@ -1092,6 +1095,9 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     resetPlayback(autoplay);
     setPlaybackRequested(autoplay);
     setCompatMap({});
+    mergeDialogGenerationRef.current += 1;
+    setMergeAsk(false);
+    setMergeError('');
     setActiveSeriesId(String(sid));
     setDetail(null);
     setDetailError('');
@@ -1228,28 +1234,49 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   };
 
   // 一键合并当前这部剧（弹出格式选择）
-  const mergeThisSeries = async (compatible) => {
-    setMerging(true);
+  const openMergeDialog = () => {
+    mergeDialogGenerationRef.current += 1;
+    setMergeError('');
+    setMergeAsk(true);
+  };
+
+  const closeMergeDialog = () => {
+    mergeDialogGenerationRef.current += 1;
+    setMergeError('');
     setMergeAsk(false);
+  };
+
+  const mergeThisSeries = async (compatible, require1080 = false) => {
+    if (mergeRequestRef.current) return;
+    mergeRequestRef.current = true;
+    const dialogGeneration = mergeDialogGenerationRef.current;
+    setMerging(true);
+    setMergeError('');
     try {
-      const res = await window.electronAPI.mergeSeries(activeSeriesId, '', { compatible });
+      const options = require1080 ? { compatible: false, require1080: true } : { compatible };
+      const res = await window.electronAPI.mergeSeries(activeSeriesId, '', options);
+      if (dialogGeneration !== mergeDialogGenerationRef.current) return;
       if (!res || !res.success) {
-        showToast((res && res.error) || '合并失败');
+        setMergeError((res && res.error) || '合并失败');
         return;
       }
+      closeMergeDialog();
       const tip = compatible
         ? `开始兼容格式合并 ${res.count} 集（H.264，耗时较长）`
+        : require1080
+        ? `开始高质量分辨率合并 ${res.count} 集`
         : `开始合并 ${res.count} 集，约 ${(res.totalBytes / 1073741824).toFixed(2)} GB`;
       showToast(`${tip}，可在「下载管理」查看进度`);
       if (res.codecWarning) showToast(res.codecWarning);
     } catch (e) {
-      showToast('合并异常: ' + e.message);
+      if (dialogGeneration === mergeDialogGenerationRef.current) setMergeError('合并异常: ' + e.message);
     } finally {
+      mergeRequestRef.current = false;
       setMerging(false);
     }
   };
 
-  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.player-confirm');
+  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); closeMergeDialog(); }, '.player-confirm');
 
   useEffect(() => {
     if (actionsHidden || !active || !portrait) {
@@ -1801,7 +1828,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
           </button>
           <button
             className="btn btn-primary"
-            onClick={() => setMergeAsk(true)}
+            onClick={openMergeDialog}
             disabled={merging || playableCount === 0}
             title="把已下载的分集合并成单个 mp4，方便一次性看完"
           >
@@ -1836,19 +1863,25 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
 
       {/* 合并格式选择 */}
       {mergeAsk && (
-        <div className="player-confirm-mask" onClick={() => setMergeAsk(false)}>
+        <div className="player-confirm-mask" onClick={closeMergeDialog}>
           <div className="player-confirm" role="dialog" aria-modal="true" aria-label={confirmAsk ? confirmAsk.title : '合并导出'} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="player-confirm-title" style={{ color: 'var(--accent)' }}>
               <Layers size={17} />
               合并导出全集
             </div>
             <div className="player-confirm-msg">
-              <p>把《{detail ? detail.series_title : ''}》已下载的 {playableCount} 集合并为一个 mp4。</p>
-              <p><b>快速合并</b>：保留原画质与编码，处理较快；部分设备可能不支持播放。</p>
-              <p><b>兼容合并</b>：转换为兼容性更好的 H.264 格式，处理时间较长。</p>
+              <p>把《{detail ? detail.series_title : ''}》已下载的 {playableCount} 集合并为一个 mp4。未下载的分集不会自动补齐。</p>
+              <p><b>高质量分辨率合并</b>：逐集检查实际文件，全部达到1080P才能开始；有低清分集请选快速或兼容合并。</p>
+              <p><b>快速合并</b>：优先无损拼接，保留每段原分辨率，部分设备可能不兼容。</p>
+              <p><b>兼容合并</b>：必要时转为H.264/AAC，仍保留每段原分辨率，处理较慢。</p>
+              <p>三种方式都保留原文件，只合并已下载分集，不自动补齐，也不会把低清变成真高清。</p>
+              {mergeError && <p className="alert-error" role="alert">{mergeError}</p>}
             </div>
             <div className="player-confirm-foot">
-              <button className="btn btn-outline" onClick={() => setMergeAsk(false)}>取消</button>
+              <button className="btn btn-outline" onClick={() => mergeThisSeries(false, true)} disabled={merging}>
+                高质量分辨率合并
+              </button>
+              <button className="btn btn-outline" onClick={closeMergeDialog}>取消</button>
               <button className="btn btn-outline" onClick={() => mergeThisSeries(true)} disabled={merging}>
                 兼容合并（H.264）
               </button>

@@ -41,35 +41,46 @@ const audio = { codec_type: 'audio', codec_name: 'aac', profile: 'LC', sample_ra
 const info = (v = {}, a = {}, duration = 20) => readMergeInfo({ streams: [{ ...video, ...v }, ...(a === null ? [] : [{ ...audio, ...a }])], format: { duration: String(duration), bit_rate: '720000', size: '1800000' } });
 const plan = (infos, compatible = false) => buildMergePlan(infos, { compatible });
 function checkHardware() {
-  const media = [info(), info({ codec_name: 'hevc' })], target = plan(media);
-  assert.equal(canUseHardwareFrames(media, target, 'h264_videotoolbox'), true);
-  assert.equal(canUseHardwareFrames(media, target, 'libx264'), false);
-  for (const mismatch of [{ width: 1080 }, { pix_fmt: 'yuv420p10le' }, { sample_aspect_ratio: '4:3' }, { codec_name: 'av1' }]) {
-    assert.equal(canUseHardwareFrames([info(), info(mismatch)], target, 'h264_videotoolbox'), false, 'ineligible input must keep the normal conversion path');
+  const media = [info(), info({ codec_name: 'hevc', width: 1920, height: 1080 })];
+  assert.equal(canUseHardwareFrames(media, 'h264_videotoolbox'), true);
+  assert.equal(canUseHardwareFrames(media, 'libx264'), false);
+  for (const mismatch of [{ pix_fmt: 'yuv420p10le' }, { sample_aspect_ratio: '4:3' }, { codec_name: 'av1' }]) {
+    assert.equal(canUseHardwareFrames([info(), info(mismatch)], 'h264_videotoolbox'), false, 'ineligible input must keep the normal conversion path');
   }
-  console.log('PASS hardware decode eligibility: matching H.264/HEVC, 8bit, dimensions, pixel aspect and encoder');
+  console.log('PASS hardware decode eligibility: per-episode H.264/HEVC, 8bit, pixel aspect and encoder');
 }
 if (process.argv.includes('--hardware-only')) { checkHardware(); process.exit(0); }
 let p = plan([info(), info({ bit_rate: '900000' })], true);
 assert.equal(p.videoMode, 'copy', 'already compatible H.264 must not be transcoded');
 assert.equal(p.audioMode, 'copy');
 assert.equal(p.remux, false, 'bitrate differences alone are harmless');
+assert.equal(p.videoTag, null);
 p = plan([info({ codec_name: 'hevc', codec_tag_string: 'hvc1' }), info({ codec_name: 'hevc', codec_tag_string: 'hvc1' })]);
 assert.equal(p.videoMode, 'copy', 'matching HEVC remains lossless in fast mode');
+assert.equal(p.videoContainer, 'mp4');
+p = plan([info({ codec_name: 'hevc', codec_tag_string: 'hvc1' }), info({ codec_name: 'hevc', codec_tag_string: 'hvc1', width: 1080, height: 1920, extradata_hash: 'SHA256:other' })]);
+assert.equal(p.videoMode, 'copy', 'different HEVC dimensions and SPS stay lossless');
+assert.equal(p.videoContainer, 'mpegts', 'HEVC resolution changes use lossless TS transport');
+assert.equal(p.videoTag, 'hev1');
 assert.equal(plan([info({ codec_name: 'hevc' }), info({ codec_name: 'hevc' })], true).videoMode, 'encode');
 p = plan([info(), info({ time_base: '1/90000' })]);
 assert.equal(p.videoMode, 'copy', 'container timebase difference only needs remux');
+assert.equal(p.videoContainer, 'mp4');
 assert.equal(p.remux, true);
 p = plan([info(), info({}, { sample_rate: '44100', time_base: '1/44100' })]);
 assert.equal(p.videoMode, 'copy', 'audio-only mismatch must preserve video');
 assert.equal(p.audioMode, 'encode');
 assert.equal(plan([info({}, null), info({}, null)]).audioMode, 'none', 'all-silent inputs stay silent');
 assert.equal(plan([info({}, null), info()]).audioMode, 'encode', 'mixed audio presence needs silence fill');
-for (const mismatch of [{ codec_name: 'hevc' }, { width: 1080, height: 1920 }, { extradata_hash: 'SHA256:different' }, { extradata_hash: undefined }]) {
+for (const mismatch of [{ width: 1080, height: 1920 }, { profile: 'Main', level: 40 }, { extradata_hash: 'SHA256:different' }, { extradata_hash: undefined }]) {
   p = plan([info(), info(mismatch)]);
-  assert.equal(p.videoMode, 'encode', 'unsafe bitstreams must use one encoder for the entire pass');
+  assert.equal(p.videoMode, 'copy', 'H.264 dimensions, SPS and bitstream changes must retain concat stream copy');
+  assert.equal(p.videoContainer, 'mp4');
+  assert.equal(p.videoTag, 'avc3');
 }
 p = plan([info(), info({ codec_name: 'hevc' })]);
+assert.equal(p.videoMode, 'encode', 'mixed H.264/HEVC must transcode each episode');
+assert.equal(p.videoTag, 'avc3');
 assert.ok(p.videoBitrate >= 650000 && p.videoBitrate <= 2000000, `source-aware bitrate must avoid fixed 6 Mbps, got ${p.videoBitrate}`);
 assert.equal(p.fps, 25, 'do not invent 30 fps when source has 25 fps');
 assert.ok(p.estimatedBytes > 0 && p.estimatedBytes < 15000000);
@@ -82,4 +93,4 @@ const sorted = sortTasks([72, 70, 71].map((index, i) => ({ id: String(index), st
 assert.deepEqual(Array.from(sorted, task => task.hongguoInfo.vid_index), [70, 71, 72], 'episodes in the same series must stay in natural order across completion events');
 checkPublish();
 checkHardware();
-console.log('PASS merge planning: lossless copy, H.264 compatibility, HEVC, timebase remux, audio-only repair, missing audio, unsafe bitstreams, source bitrate and duration');
+console.log('PASS merge planning: dynamic H.264 copy, lossless HEVC TS remux, mixed-codec encode, audio repair, source bitrate and duration');

@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 4.1 下载器（独立版）主进程
+ * main.js - 红果短剧 4.2 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -2273,6 +2273,30 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     const ffmpegPath = resolveFfmpeg('ffmpeg'), ffprobePath = resolveFfmpeg('ffprobe');
     if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到完整 FFmpeg 工具，无法检查并合并分集' };
     if (mergeTasks.some(t => t.status === 'running')) return { success: false, error: '已有合并任务正在运行，请等待完成或先取消' };
+    let precheckedInfos;
+    if (options?.require1080 === true) {
+      const below1080 = [];
+      precheckedInfos = [];
+      for (const episode of ordered) {
+        let info;
+        try { info = await probeVideoInfo(ffprobePath, episode.path, undefined, true); }
+        catch (_) { info = null; }
+        if (!info || !(info.w > 0) || !(info.h > 0)) {
+          return { success: false, code: 'MERGE_1080_UNAVAILABLE',
+            error: `第 ${episode.vid_index} 集视频信息读取失败，无法确认是否达到 1080P；请选择快速合并或兼容合并。` };
+        }
+        const quality = Math.min(info.w, info.h);
+        precheckedInfos.push(info);
+        if (quality < 1080) below1080.push({ index: episode.vid_index, quality, w: info.w, h: info.h });
+      }
+      if (below1080.length) {
+        const shown = below1080.slice(0, 3).map(item => `第 ${item.index} 集实际为 ${item.quality}P（${item.w}×${item.h}）`).join('、');
+        const more = below1080.length > 3 ? `…共 ${below1080.length} 集未达到 1080P` : `；共 ${below1080.length} 集未达到 1080P`;
+        return { success: false, code: 'MERGE_1080_UNAVAILABLE', error: `${shown}${more}；请选择快速合并或兼容合并。` };
+      }
+      // Probing yields to other IPC requests; re-check before synchronously creating and saving a task.
+      if (mergeTasks.some(t => t.status === 'running')) return { success: false, error: '已有合并任务正在运行，请等待完成或先取消' };
+    }
     const outDir = dir || path.dirname(ordered[0].path);
     const baseName = outputName && String(outputName).trim() ? sanitizeFolderName(outputName) : `${sanitizeFolderName(seriesTitle)}_合集`;
     if (!baseName || baseName === '.' || baseName === '..') return { success: false, error: '请输入有效输出名称' };
@@ -2290,7 +2314,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     const run = (async () => {
       try {
         await runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe: probeVideoInfo,
-          pickEncoder: pickH264Encoder, compatible: !!options?.compatible,
+          precheckedInfos, pickEncoder: pickH264Encoder, compatible: !!options?.compatible,
           update: () => { const { child, ...data } = task; sendToRenderer('merge-progress', data); } });
       } catch (error) {
         task.status = task.cancelled ? 'stopped' : 'failed';

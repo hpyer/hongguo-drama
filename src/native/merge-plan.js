@@ -17,7 +17,11 @@ function readMergeInfo(data) {
 function buildMergePlan(infos, { compatible = false } = {}) {
   if (!infos.length || infos.some(info => !info || !(info.duration > 0) || !(info.w > 0) || !(info.h > 0))) throw new Error('分集缺少有效时长或画面尺寸');
   const first = infos[0], totalDuration = infos.reduce((sum, info) => sum + info.duration, 0);
-  const videoMode = !['h264', 'hevc'].includes(first.codec) || (compatible && first.codec !== 'h264') || infos.some(info => !info.video.extradata_hash || info.videoSignature !== first.videoSignature) ? 'encode' : 'copy';
+  const sameCodec = ['h264', 'hevc'].includes(first.codec) && infos.every(info => info.codec === first.codec);
+  const videoMode = sameCodec && !(compatible && first.codec !== 'h264') ? 'copy' : 'encode';
+  const videoContainer = videoMode === 'copy' && first.codec === 'hevc' && infos.some(info => info.videoSignature !== first.videoSignature) ? 'mpegts' : 'mp4';
+  const dynamicVideo = infos.some(info => info.videoSignature !== first.videoSignature);
+  const videoTag = videoContainer === 'mpegts' ? 'hev1' : videoMode === 'encode' ? (dynamicVideo ? 'avc3' : null) : first.codec === 'h264' && dynamicVideo ? 'avc3' : null;
   const hasAudio = infos.some(info => info.audio);
   const audioMode = !hasAudio ? 'none' : videoMode === 'encode' || infos.some(info => !info.audio || !info.audioStream.extradata_hash || info.audioSignature !== first.audioSignature) || (compatible && first.audioStream?.codec_name !== 'aac') ? 'encode' : 'copy';
   const remux = infos.some(info => info.video.time_base !== first.video.time_base || info.audioStream?.time_base !== first.audioStream?.time_base);
@@ -27,13 +31,12 @@ function buildMergePlan(infos, { compatible = false } = {}) {
   const sourceRate = infos.reduce((sum, info) => sum + (info.videoBitrate || info.w * info.h * fps * 0.04) * (info.codec === 'hevc' ? 1.8 : 1.25) * info.duration, 0) / totalDuration;
   const videoBitrate = Math.round(Math.min(20000000, Math.max(300000, sourceRate)) / 1000) * 1000;
   const audioBitrate = hasAudio ? 96000 : 0;
-  return { videoMode, audioMode, remux, fps, width: Math.ceil(first.w / 2) * 2, height: Math.ceil(first.h / 2) * 2,
+  return { videoMode, videoContainer, videoTag, audioMode, remux, fps,
     videoBitrate, audioBitrate, totalDuration, estimatedBytes: totalDuration * (videoBitrate + audioBitrate) / 8 };
 }
 
-function canUseHardwareFrames(infos, plan, encoder) {
+function canUseHardwareFrames(infos, encoder) {
   return encoder === 'h264_videotoolbox' && infos.every(info => ['h264', 'hevc'].includes(info.codec)
-    && info.video.pix_fmt === 'yuv420p' && info.w === plan.width && info.h === plan.height
-    && (!info.video.sample_aspect_ratio || info.video.sample_aspect_ratio === '1:1'));
+    && info.video.pix_fmt === 'yuv420p' && (!info.video.sample_aspect_ratio || info.video.sample_aspect_ratio === '1:1'));
 }
 module.exports = { readMergeInfo, buildMergePlan, canUseHardwareFrames };

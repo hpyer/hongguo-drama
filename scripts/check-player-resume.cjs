@@ -115,6 +115,7 @@ function mount({ local = false, localIndexes = [], saved = null, transcode, prep
   render();
   return { props, render, flush, find, media, metadata, saves, prepares, transcodes, cancelled, events, timers, listenerOptions, mediaCalls, document, dispatchKey,
     releases, settingsSaved, stage, scrollArea,
+    text: () => text(tree),
     historyUpdated: payload => [...historyListeners].forEach(listener => listener(payload)),
     flushBatched: async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); render(); },
     transcodeProgress: payload => transcodeProgress?.(payload),
@@ -388,6 +389,82 @@ if (require.main === module) (async () => {
     ui.render(); await ui.flush();
     assert.equal(ui.pictureInPictureExits(), 1, 'leaving the player page must close the native PiP window');
     assert.equal(ui.media.paused, true, 'the retained player must still pause after leaving');
+    ui.unmount();
+  });
+  await test('merge quality mode preserves the dialog on 1080P rejection and supports fallback modes', async () => {
+    let resolveHigh;
+    const calls = [];
+    const ui = mount({
+      local: true,
+      apiOverrides: {
+        mergeSeries: (...args) => {
+          calls.push(args);
+          if (args[2].require1080) return new Promise(resolve => { resolveHigh = resolve; });
+          return Promise.resolve({ success: true, count: 2, totalBytes: 1000 });
+        },
+      },
+    });
+    await ui.flush();
+    ui.button('合并导出全集').props.onClick(); ui.render();
+    assert.match(ui.text(), /逐集检查实际文件，全部达到1080P才能开始/);
+    assert.match(ui.text(), /优先无损拼接，保留每段原分辨率/);
+    assert.match(ui.text(), /必要时转为H\.264\/AAC，仍保留每段原分辨率/);
+    assert.match(ui.text(), /三种方式都保留原文件，只合并已下载分集/);
+    const high = ui.button('高质量分辨率合并');
+    const quick = ui.button('快速合并');
+    assert.ok(high);
+    high.props.onClick();
+    quick.props.onClick();
+    ui.render();
+    assert.equal(calls.length, 1, 'rapid mode clicks must submit once');
+    assert.equal(calls[0][0], 'A');
+    assert.equal(calls[0][1], '');
+    assert.equal(calls[0][2].compatible, false);
+    assert.equal(calls[0][2].require1080, true);
+    assert.deepEqual(Object.keys(calls[0][2]).sort(), ['compatible', 'require1080']);
+    assert.equal(ui.button('高质量分辨率合并').props.disabled, true);
+    assert.equal(ui.button('兼容合并（H.264）').props.disabled, true);
+    assert.equal(ui.button('快速合并').props.disabled, true);
+    resolveHigh({
+      success: false,
+      code: 'MERGE_1080_UNAVAILABLE',
+      error: '第2集实际为720P，请选择快速合并或兼容合并',
+    });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), '1080P failure must keep the merge dialog open');
+    assert.ok(ui.find(node => node.props.role === 'alert' && ui.text().includes('第2集实际为720P')), '1080P failure must be shown inline');
+    await ui.button('快速合并').props.onClick();
+    await ui.flush();
+    assert.equal(ui.button('高质量分辨率合并'), undefined, 'successful merge must close the dialog');
+    assert.equal(calls[1][2].compatible, false);
+    assert.deepEqual(Object.keys(calls[1][2]), ['compatible']);
+    ui.button('合并导出全集').props.onClick(); ui.render();
+    assert.ok(!ui.text().includes('第2集实际为720P'), 'reopening must clear the old error');
+    await ui.button('兼容合并（H.264）').props.onClick();
+    await ui.flush();
+    assert.equal(calls[2][2].compatible, true);
+    assert.deepEqual(Object.keys(calls[2][2]), ['compatible']);
+    assert.equal(ui.button('高质量分辨率合并'), undefined);
+
+    ui.button('合并导出全集').props.onClick(); ui.render();
+    ui.button('高质量分辨率合并').props.onClick(); ui.render();
+    ui.button('取消').props.onClick(); ui.render();
+    ui.button('提交中...').props.onClick(); ui.render();
+    resolveHigh({
+      success: false,
+      code: 'MERGE_1080_UNAVAILABLE',
+      error: '旧剧第2集实际为720P',
+    });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), 'late failure from a closed dialog must not close the new dialog');
+    assert.ok(!ui.text().includes('旧剧第2集实际为720P'), 'late failure from a closed dialog must not leak into the new dialog');
+
+    ui.button('高质量分辨率合并').props.onClick(); ui.render();
+    ui.button('取消').props.onClick(); ui.render();
+    ui.button('提交中...').props.onClick(); ui.render();
+    resolveHigh({ success: true, count: 2, totalBytes: 1000 });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), 'late success from a closed dialog must not close the new dialog');
     ui.unmount();
   });
   process.exitCode = failures ? 1 : 0;

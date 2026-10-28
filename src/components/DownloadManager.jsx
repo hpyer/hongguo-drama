@@ -65,6 +65,7 @@ function DownloadManager({ onNavigate, active = true }) {
   const [seriesList, setSeriesList] = useState([]);
   const [mergeSeriesId, setMergeSeriesId] = useState('');
   const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState('');
   const [mergeTasks, setMergeTasks] = useState([]);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
   const [mergeAsk, setMergeAsk] = useState(false);    // 合并格式选择
@@ -73,6 +74,8 @@ function DownloadManager({ onNavigate, active = true }) {
   const [loadError, setLoadError] = useState('');
   const toastTimerRef = useRef(null);
   const moreActionsRef = useRef(null);
+  const mergeRequestRef = useRef(false);
+  const mergeDialogGenerationRef = useRef(0);
   const activeRef = useRef(active);
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
@@ -139,7 +142,11 @@ function DownloadManager({ onNavigate, active = true }) {
   }, []);
 
   // 列表刷新改选另一部剧时，旧确认框不能继续提交。
-  useEffect(() => { setMergeAsk(false); }, [mergeSeriesId]);
+  useEffect(() => {
+    mergeDialogGenerationRef.current += 1;
+    setMergeAsk(false);
+    setMergeError('');
+  }, [mergeSeriesId]);
 
   const loadMergeTasks = useCallback(async () => {
     const request = ++requests.current.merges;
@@ -305,29 +312,50 @@ function DownloadManager({ onNavigate, active = true }) {
   };
 
   // 一键合并选中的短剧
-  const doMerge = async (compatible) => {
+  const openMergeDialog = () => {
+    mergeDialogGenerationRef.current += 1;
+    setMergeError('');
+    setMergeAsk(true);
+  };
+
+  const closeMergeDialog = () => {
+    mergeDialogGenerationRef.current += 1;
+    setMergeError('');
+    setMergeAsk(false);
+  };
+
+  const doMerge = async (compatible, require1080 = false) => {
+    if (mergeRequestRef.current) return;
     if (!mergeSeriesId) {
       showToast('请先选择要合并的短剧', 'error');
       return;
     }
-    setMergeAsk(false);
+    mergeRequestRef.current = true;
+    const dialogGeneration = mergeDialogGenerationRef.current;
     setMerging(true);
+    setMergeError('');
     try {
-      const res = await window.electronAPI.mergeSeries(mergeSeriesId, '', { compatible });
+      const options = require1080 ? { compatible: false, require1080: true } : { compatible };
+      const res = await window.electronAPI.mergeSeries(mergeSeriesId, '', options);
+      if (dialogGeneration !== mergeDialogGenerationRef.current) return;
       if (!res || !res.success) {
-        showToast((res && res.error) || '合并失败', 'error');
+        setMergeError((res && res.error) || '合并失败');
         return;
       }
+      closeMergeDialog();
       await loadMergeTasks();
       const sizeGb = (res.totalBytes / 1073741824).toFixed(2);
       const duration = res.totalDuration > 0 ? ` / ${fmtElapsed(res.totalDuration)}` : ' / 时长待探测';
       showToast(compatible
         ? `开始兼容格式合并 ${res.count} 集（H.264，耗时较长）`
+        : require1080
+        ? `开始高质量分辨率合并 ${res.count} 集`
         : `开始合并 ${res.count} 集（约 ${sizeGb} GB${duration}）`);
       if (res.codecWarning) showToast(res.codecWarning, 'error');
     } catch (e) {
-      showToast('合并异常: ' + e.message, 'error');
+      if (dialogGeneration === mergeDialogGenerationRef.current) setMergeError('合并异常: ' + e.message);
     } finally {
+      mergeRequestRef.current = false;
       setMerging(false);
     }
   };
@@ -425,7 +453,7 @@ function DownloadManager({ onNavigate, active = true }) {
     [selected, taskById]
   );
 
-  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.dm-container .player-confirm');
+  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); closeMergeDialog(); }, '.dm-container .player-confirm');
 
   return (
     <div className="dm-container">
@@ -526,7 +554,7 @@ function DownloadManager({ onNavigate, active = true }) {
                 </option>
               ))}
             </select>
-            <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging} title="把该剧已下载的分集合并成单个 mp4">
+            <button className="btn btn-outline" onClick={openMergeDialog} disabled={merging} title="把该剧已下载的分集合并成单个 mp4">
               <Layers size={15} />
               {merging ? '合并中...' : '合并整部剧'}
             </button>
@@ -746,7 +774,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
       {/* 合并格式选择 */}
       {mergeAsk && (
-        <div className="player-confirm-mask" onClick={() => setMergeAsk(false)}>
+        <div className="player-confirm-mask" onClick={closeMergeDialog}>
           <div className="player-confirm" role="dialog" aria-modal="true" aria-label={confirmAsk ? confirmAsk.title : '合并导出'} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="player-confirm-title" style={{ color: 'var(--accent)' }}>
               <Layers size={17} />
@@ -754,11 +782,17 @@ function DownloadManager({ onNavigate, active = true }) {
             </div>
             <div className="player-confirm-msg">
               <p>将《{seriesList.find((series) => String(series.series_id) === mergeSeriesId)?.series_title || '所选短剧'}》的全部已下载分集合并为一个 mp4。未下载的分集不会自动补齐。</p>
-              <p><b>智能快速合并</b>：格式一致时无损合并；不一致时只处理必要的音视频，耗时取决于总时长。</p>
-              <p><b>兼容合并</b>：导出 H.264/AAC，已经兼容的分集无需重复转换。两种方式都保留原文件。</p>
+              <p><b>高质量分辨率合并</b>：逐集检查实际文件，全部达到1080P才能开始；有低清分集请选快速或兼容合并。</p>
+              <p><b>快速合并</b>：优先无损拼接，保留每段原分辨率，部分设备可能不兼容。</p>
+              <p><b>兼容合并</b>：必要时转为H.264/AAC，仍保留每段原分辨率，处理较慢。</p>
+              <p>三种方式都保留原文件，只合并已下载分集，不自动补齐，也不会把低清变成真高清。</p>
+              {mergeError && <p className="alert-error" role="alert">{mergeError}</p>}
             </div>
             <div className="player-confirm-foot">
-              <button className="btn btn-outline" onClick={() => setMergeAsk(false)}>取消</button>
+              <button className="btn btn-outline" onClick={() => doMerge(false, true)} disabled={merging}>
+                高质量分辨率合并
+              </button>
+              <button className="btn btn-outline" onClick={closeMergeDialog}>取消</button>
               <button className="btn btn-outline" onClick={() => doMerge(true)} disabled={merging}>
                 兼容合并（H.264）
               </button>

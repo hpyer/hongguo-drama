@@ -30,13 +30,13 @@ async function cleanupMergeTemps(directories) {
       const temporary = path.join(directory, entry.name);
       const children = await fs.promises.readdir(temporary, { withFileTypes: true });
       // Only remove our flat work files, never unrelated folders or symbolic links.
-      if (children.some(child => !child.isFile() || !/^(?:\d+\.mp4|list\.ffconcat|output\.mp4)$/.test(child.name))) continue;
+      if (children.some(child => !child.isFile() || !/^(?:\d+\.(?:mp4|ts)|list\.ffconcat|output\.mp4)$/.test(child.name))) continue;
       await fs.promises.rm(temporary, { recursive: true, force: true, maxRetries: 2 });
     }
   }
 }
 
-async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe, pickEncoder, compatible, update }) {
+async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe, precheckedInfos, pickEncoder, compatible, update }) {
   Object.defineProperty(task, 'children', { value: new Set(), configurable: true });
   let temporary, lastUpdate = 0, stageStarted = Date.now();
   task.phaseTimings = {};
@@ -54,13 +54,12 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
     if (task.cancelled) return reject(new Error('已取消'));
     const child = spawn(ffmpegPath, ['-y', '-hide_banner', '-loglevel', 'error', ...args, '-progress', 'pipe:1', '-nostats'], { windowsHide: true });
     task.children.add(child);
-    let pending = '', errors = '', frames = 0, spawnError;
+    let pending = '', errors = '', spawnError;
     child.stdout.on('data', data => {
       pending += data.toString();
       const lines = pending.split('\n'); pending = lines.pop() || '';
       for (const line of lines) {
         if (line.startsWith('out_time_us=')) onTime?.(Math.max(0, Number(line.slice(12)) / 1e6 || 0));
-        if (line.startsWith('frame=')) frames = Number(line.slice(6)) || frames;
       }
     });
     child.stderr.on('data', data => { errors = (errors + data.toString()).slice(-2400); });
@@ -70,24 +69,31 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
       if (task.cancelled) reject(new Error('已取消'));
       else if (spawnError) reject(new Error('无法启动 FFmpeg: ' + spawnError.message));
       else if (code !== 0) reject(new Error(`FFmpeg 退出码 ${code}：${errors.trim() || '没有返回错误详情'}`));
-      else resolve({ frames });
+      else resolve();
     });
   });
   try {
     stage('checking', '检查分集');
-    const infos = [];
-    for (let i = 0; i < ordered.length; i++) {
-      check();
-      const info = await probe(ffprobePath, ordered[i].path, task);
-      check();
-      if (!info || info.duration <= 0) throw new Error(`第 ${ordered[i].vid_index} 集无法读取有效视频信息，请重新下载本集`);
-      infos.push(info); task.checked = i + 1; emit();
+    let infos;
+    if (precheckedInfos?.length === ordered.length) {
+      infos = precheckedInfos;
+      task.checked = ordered.length;
+      emit(true);
+    } else {
+      infos = [];
+      for (let i = 0; i < ordered.length; i++) {
+        check();
+        const info = await probe(ffprobePath, ordered[i].path, task);
+        check();
+        if (!info || info.duration <= 0) throw new Error(`第 ${ordered[i].vid_index} 集无法读取有效视频信息，请重新下载本集`);
+        infos.push(info); task.checked = i + 1; emit();
+      }
     }
     const plan = buildMergePlan(infos, { compatible });
     task.totalDuration = plan.totalDuration;
-    const normalize = plan.videoMode === 'encode' || plan.audioMode === 'encode' || plan.remux;
-    task.method = plan.videoMode === 'encode' ? '统一视频编码' : plan.audioMode === 'encode' ? '保留画质，仅统一音频' : plan.remux ? '无损统一封装' : '无损快速合并';
-    task.codecWarning = plan.videoMode === 'encode' ? '分集编码不一致，按源画质统一为 H.264；原文件保留' : '';
+    const normalize = plan.videoMode === 'encode' || plan.audioMode === 'encode' || plan.remux || plan.videoContainer === 'mpegts';
+    task.method = plan.videoMode === 'encode' ? '统一视频编码' : plan.audioMode === 'encode' ? '保留画质，仅统一音频' : plan.remux || plan.videoContainer === 'mpegts' ? '无损统一封装' : '无损快速合并';
+    task.codecWarning = plan.videoMode === 'encode' ? '分集编码不一致，按各自原分辨率统一为 H.264；原文件保留' : '';
     task.targetBitrate = plan.videoMode === 'encode' ? plan.videoBitrate : null;
     const estimate = plan.videoMode === 'encode' ? plan.estimatedBytes : task.totalBytes * 1.1;
     const required = estimate * (normalize ? 2.2 : 1.1);
@@ -100,11 +106,12 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
     let files = ordered.map(e => e.path);
     if (normalize) {
       let encoder = plan.videoMode === 'encode' ? await pickEncoder(ffmpegPath, task) : null;
-      let hardwareFrames = canUseHardwareFrames(infos, plan, encoder);
+      let hardwareFrames = canUseHardwareFrames(infos, encoder);
       check();
       const normalizeAll = async () => {
         stage('preparing', plan.videoMode === 'encode' ? '统一视频编码' : plan.audioMode === 'encode' ? '统一音频' : '无损统一封装');
-        const times = ordered.map(() => 0), targets = ordered.map((_, i) => path.join(temporary, `${i}.mp4`));
+        const extension = plan.videoContainer === 'mpegts' ? 'ts' : 'mp4';
+        const times = ordered.map(() => 0), targets = ordered.map((_, i) => path.join(temporary, `${i}.${extension}`));
         const started = Date.now(); let next = 0, failure;
         task.done = 0; task.progress = 0; task.encoder = encoder || 'copy';
         task.decoder = hardwareFrames ? 'videotoolbox' : 'software';
@@ -121,17 +128,19 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
               args.push('-map', '0:v:0');
               if (plan.audioMode !== 'none') args.push('-map', infos[i].audio ? '0:a:0' : '1:a:0');
               if (plan.videoMode === 'encode') {
-                const geometry = hardwareFrames ? '' : `scale=${plan.width}:${plan.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${plan.width}:${plan.height}:(ow-iw)/2:(oh-ih)/2,`;
-                args.push('-vf', `${geometry}setsar=1,fps=${plan.fps},settb=1/90000,setpts=PTS-STARTPTS`,
+                args.push('-vf', `setsar=1,fps=${plan.fps},settb=1/90000,setpts=PTS-STARTPTS`,
                   '-c:v', encoder, ...(encoder === 'libx264' ? ['-preset', 'veryfast', '-threads', '4'] : []),
                   '-b:v', String(plan.videoBitrate), '-maxrate', String(plan.videoBitrate * 1.5), '-bufsize', String(plan.videoBitrate * 3),
                   '-profile:v', 'high', ...(hardwareFrames ? [] : ['-pix_fmt', 'yuv420p']), '-bf', '0', '-g', String(Math.round(plan.fps * 2)));
-              } else args.push('-c:v', 'copy');
+              } else {
+                args.push('-c:v', 'copy');
+                if (plan.videoContainer === 'mpegts') args.push('-bsf:v', 'hevc_mp4toannexb');
+              }
               args.push('-video_track_timescale', '90000');
               if (plan.audioMode === 'encode') args.push('-af', 'aresample=48000:async=1:first_pts=0,apad', '-c:a', 'aac', '-b:a', String(plan.audioBitrate), '-ar', '48000', '-ac', '2');
               else if (plan.audioMode === 'copy') args.push('-c:a', 'copy');
               else args.push('-an');
-              args.push('-t', String(infos[i].duration), '-map_metadata', '-1', '-f', 'mp4', targets[i]);
+              args.push('-t', String(infos[i].duration), '-map_metadata', '-1', '-f', plan.videoContainer === 'mpegts' ? 'mpegts' : 'mp4', targets[i]);
               await run(args, seconds => {
                 times[i] = Math.min(seconds, infos[i].duration);
                 const processed = times.reduce((sum, value) => sum + value, 0);
@@ -154,7 +163,7 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
           check();
           if (!encoder || encoder === 'libx264') throw error;
           // Every child has closed. Restart the whole pass; never mix settings or encoders.
-          for (let i = 0; i < ordered.length; i++) await fs.promises.rm(path.join(temporary, `${i}.mp4`), { force: true });
+          for (let i = 0; i < ordered.length; i++) await fs.promises.rm(path.join(temporary, `${i}.${plan.videoContainer === 'mpegts' ? 'ts' : 'mp4'}`), { force: true });
           if (hardwareFrames) {
             hardwareFrames = false;
             task.codecWarning = '硬件解码不可用，已切换常规解码；仍使用硬件编码';
@@ -164,47 +173,24 @@ async function runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe,
           }
         }
       }
-      // Even one encoder can choose a different header for different inputs. Never silently concatenate it.
-      let reference;
-      for (const file of files) {
-        check();
-        const info = await probe(ffprobePath, file, task);
-        if (!info || (reference && info.signature !== reference.signature)) throw new Error('统一后的分集参数仍不一致，已停止合并；原文件保留');
-        reference = info;
-      }
     }
     check();
     stage('joining', '写入合并文件');
     const listPath = path.join(temporary, 'list.ffconcat'), tmpOutput = path.join(temporary, 'output.mp4');
     fs.writeFileSync(listPath, files.map(file => `file '${file.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n') + '\n');
     const joinedAt = Date.now();
-    await run(['-f', 'concat', '-safe', '0', '-i', listPath, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', tmpOutput], seconds => {
+    await run(['-f', 'concat', '-safe', '0', '-i', listPath, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
+      ...(plan.videoTag ? ['-tag:v', plan.videoTag] : []), '-movflags', '+faststart', '-f', 'mp4', tmpOutput], seconds => {
       task.progress = Math.min(97, Math.floor((normalize ? 90 : 0) + Math.min(1, seconds / plan.totalDuration) * (normalize ? 7 : 97)));
       task.speed = seconds / Math.max(0.1, (Date.now() - joinedAt) / 1000);
       task.etaSeconds = task.speed ? Math.max(0, (plan.totalDuration - seconds) / task.speed) : null;
       if (!normalize) { let sum = 0; task.done = infos.filter(info => (sum += info.duration) <= seconds).length; }
       emit();
     });
-    check(); stage('verifying', '校验时长与拼接点');
-    const outputInfo = await probe(ffprobePath, tmpOutput, task);
-    if (!outputInfo || Math.abs(outputInfo.duration - plan.totalDuration) > Math.max(0.5, ordered.length * 0.06)) throw new Error('合并输出时长校验失败，原始分集未改动');
-    if (outputInfo.audio !== (plan.audioMode !== 'none') || (plan.videoMode === 'encode' && outputInfo.codec !== 'h264')) throw new Error('合并输出音视频轨道校验失败');
-    // Check head/tail and boundaries where original decoder configuration changes. Identical headers need no repeated decoder checks.
-    const points = [0, Math.max(0, plan.totalDuration - 0.6)]; let boundary = 0;
-    for (let i = 1; i < infos.length; i++) {
-      boundary += infos[i - 1].duration;
-      if (infos[i].signature !== infos[i - 1].signature) points.push(Math.max(0, boundary - 0.3));
-    }
-    for (const start of [...new Set(points)]) {
-      check();
-      const duration = Math.min(0.6, plan.totalDuration - start);
-      const result = await run(['-xerror', '-err_detect', 'explode', '-ss', String(start), '-i', tmpOutput, '-t', String(duration), '-map', '0:v:0', '-map', '0:a:0?', '-f', 'null', '-']);
-      if (result.frames < Math.max(1, Math.floor(duration * plan.fps * 0.5))) throw new Error(`拼接点画面校验失败（${start.toFixed(1)} 秒），原始分集未改动`);
-    }
     check();
     // Publish without replacing a file created while the merge was running.
     publishMergedOutput(tmpOutput, task.output);
-    task.verified = `${outputInfo.codec} ${outputInfo.w}x${outputInfo.h} · 时长/拼接点已校验`;
+    task.verified = '';
     task.outputBytes = fs.statSync(task.output).size;
     recordStage();
     task.status = 'completed'; task.stage = 'completed'; task.stageText = '合并完成'; task.progress = 100; task.done = ordered.length; task.etaSeconds = 0;

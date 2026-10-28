@@ -158,6 +158,86 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
     merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载分集'));
     await ui.button('智能快速合并').props.onClick(); await ui.flush(); assert.equal(sent[0], 'A'); assert.equal(sent[2].compatible, false); ui.unmount();
   });
+  await test('whole-series 1080P merge keeps the dialog and supports fallback modes', async () => {
+    let resolveHigh;
+    const calls = [];
+    const ui = mount({
+      getSeriesList: async () => [{ series_id: 'A', series_title: '混清晰度示例剧' }],
+      getDownloadTasks: async () => [task(1, 'completed'), task(2, 'completed')],
+      mergeSeries: (...args) => {
+        calls.push(args);
+        if (args[2].require1080) return new Promise(resolve => { resolveHigh = resolve; });
+        return Promise.resolve({ success: true, count: 2, totalBytes: 1000 });
+      },
+    });
+    await ui.flush();
+    ui.button('合并整部剧').props.onClick(); ui.render();
+    assert.match(ui.text(), /逐集检查实际文件，全部达到1080P才能开始/);
+    assert.match(ui.text(), /优先无损拼接，保留每段原分辨率/);
+    assert.match(ui.text(), /必要时转为H\.264\/AAC，仍保留每段原分辨率/);
+    assert.match(ui.text(), /三种方式都保留原文件，只合并已下载分集/);
+    assert.match(ui.text(), /未下载的分集不会自动补齐/);
+    assert.match(ui.text(), /保留原文件/);
+    const high = ui.button('高质量分辨率合并');
+    const quick = ui.button('智能快速合并');
+    assert.ok(high);
+    high.props.onClick();
+    quick.props.onClick();
+    ui.render();
+    assert.equal(calls.length, 1, 'rapid mode clicks must submit once');
+    assert.equal(calls[0][0], 'A');
+    assert.equal(calls[0][1], '');
+    assert.equal(calls[0][2].compatible, false);
+    assert.equal(calls[0][2].require1080, true);
+    assert.deepEqual(Object.keys(calls[0][2]).sort(), ['compatible', 'require1080']);
+    assert.equal(ui.button('高质量分辨率合并').props.disabled, true);
+    assert.equal(ui.button('兼容合并（H.264）').props.disabled, true);
+    assert.equal(ui.button('智能快速合并').props.disabled, true);
+    resolveHigh({
+      success: false,
+      code: 'MERGE_1080_UNAVAILABLE',
+      error: '第2集实际为720P，请选择快速合并或兼容合并',
+    });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), '1080P failure must keep the merge dialog open');
+    const alert = ui.find(node => node.props.role === 'alert' && ui.text().includes('第2集实际为720P'));
+    assert.ok(alert, '1080P failure must be shown inline');
+    assert.match(ui.text(), /未下载的分集不会自动补齐/);
+    assert.match(ui.text(), /保留原文件/);
+    await ui.button('智能快速合并').props.onClick();
+    await ui.flush();
+    assert.equal(ui.button('高质量分辨率合并'), undefined, 'successful merge must close the dialog');
+    assert.equal(calls[1][2].compatible, false);
+    assert.deepEqual(Object.keys(calls[1][2]), ['compatible']);
+    ui.button('合并整部剧').props.onClick(); ui.render();
+    assert.ok(!ui.text().includes('第2集实际为720P'), 'reopening must clear the old error');
+    await ui.button('兼容合并（H.264）').props.onClick();
+    await ui.flush();
+    assert.equal(calls[2][2].compatible, true);
+    assert.deepEqual(Object.keys(calls[2][2]), ['compatible']);
+    assert.equal(ui.button('高质量分辨率合并'), undefined);
+
+    ui.button('合并整部剧').props.onClick(); ui.render();
+    ui.button('高质量分辨率合并').props.onClick(); ui.render();
+    ui.button('取消').props.onClick(); ui.render();
+    ui.button('合并中...').props.onClick(); ui.render();
+    resolveHigh({
+      success: false,
+      code: 'MERGE_1080_UNAVAILABLE',
+      error: '旧剧第2集实际为720P',
+    });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), 'late failure from a closed dialog must not close the new dialog');
+    assert.ok(!ui.text().includes('旧剧第2集实际为720P'), 'late failure from a closed dialog must not leak into the new dialog');
+
+    ui.button('高质量分辨率合并').props.onClick(); ui.render();
+    ui.button('取消').props.onClick(); ui.render();
+    ui.button('合并中...').props.onClick(); ui.render();
+    resolveHigh({ success: true, count: 2, totalBytes: 1000 });
+    await ui.flush();
+    assert.ok(ui.button('高质量分辨率合并'), 'late success from a closed dialog must not close the new dialog');
+    ui.unmount();
+  });
   await test('task list pages at 100 while global totals and cross-page selections persist', async () => {
     const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
     assert.equal(rows(ui).length, 100); assert.ok(ui.text().includes('已完成 205'));
