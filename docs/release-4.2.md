@@ -1,6 +1,6 @@
 # 红果短剧 4.2
 
-状态：源码／发行目标（内部 `4.2.0`）。本地完整回归通过；正式三端构建、签名、公证和发布回执将在完成后写入。
+**状态：已正式发布。** 4.2（内部 `4.2.0`）已于 2026-10-28 10:46（Asia/Shanghai）正式发布，标签 `v4.2`。冻结源码 `cd71e3ea7405d94b2de5c1b7e697c9dc5716c872`；三端16项附件远端SHA256与大小逐项匹配。双Mac App与DMG已完成Developer ID签名、Apple公证Accepted和装订；Windows CI 40610802618便携媒体、安装、重装和真实1.80升级资料保留检查通过，EXE未签名。
 
 ## 合并方式
 
@@ -30,4 +30,14 @@
 - Ego媒体：播放后端真实IPC生成的测试合集，H.264实际显示1080P、720P、480P三段，HEVC实际显示1080P、720P两段，均自然播放结束。短素材和记录保存在本地忽略目录 `.planning/fix-4.2-merge-resolution/final-media/`。开发验收对测试输出的检查不会加入产品运行流程。
 - 625组4.2版本检查此前已通过；本轮未更改版本配置，不重复执行。旧版“统一最高画布”的测试结果不作为当前实现的通过证据。
 
-未覆盖用户原始问题视频、实体Windows/Intel设备或长期播放。正式构建、公证和三端发行状态以发布回执为准。
+## 正式发行回执
+
+- 完整 `npm test` 通过，包括单元测试与91项平台检查；冻结源码 Test CI 40610757324 与 Windows CI 40610802618 均成功。
+- 双 Mac App 公证 submission `9caaaba5-85d0-445b-8f38-392f71e2626d`、`cf4f9b95-00c6-41d3-90ab-f4d55f62931c` 为 Accepted；双 DMG submission `a85aa7f0-4919-4e56-b2e0-5e96fddc1452`、`1d3b8af0-59ca-4872-b822-2fa3100f431b` 为 Accepted，全部装订验证通过。旧 arm64 submission `56298f06-553a-49c8-af62-4ad869aed661` 是上传超时留下的 In Progress 记录，未作为成功凭据。
+- 最终更新 ZIP 从未修改的装订 App 重新压缩，解压后再次验签验票，且 `app.asar` 一致；双 DMG 只读挂载通过。arm64 原生与 x64 Rosetta 隔离启动/退出通过。
+- Windows 便携11项、安装/重装/真实1.80升级9项检查通过；便携 ZIP 内 EXE、与 `latest.yml` 的大小/SHA512及 324 个源码文件均核对。
+- 16 项资产和 GitHub 服务端 SHA256 已逐项验证；10 个匿名下载入口通过。四份对应源码中分别包含应用精确源码、通用 FFmpeg/x264、x64 FFmpeg/x264 与 Windows FFmpeg/x264。
+
+### 验证边界
+
+未覆盖用户原始问题视频、实体Intel Mac、实体Windows/GPU、干净Gatekeeper、长期播放或完整应用内跨版本更新。Windows播放验收使用CI中的H.264/AAC CC0素材，不是真实平台下载或HEVC实机；Windows EXE未签名。
