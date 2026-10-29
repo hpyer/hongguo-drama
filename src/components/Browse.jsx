@@ -80,6 +80,7 @@ function Browse({ onNavigate, active = true }) {
   const listRequest = useRef(0);
   const loadingRequest = useRef(0);
   const pageCache = useRef(new Map()).current;
+  const discoveryPages = useRef(new Map()).current;
   const refreshFirstPage = useRef(false);
   const refreshToFirstPage = useRef(false);
   const viewRef = useRef({ source: '', category: '', channel: '', genre: '', page: 0 });
@@ -159,6 +160,8 @@ function Browse({ onNavigate, active = true }) {
       const channel = source === 'hongguo' ? catalogChannel : '';
       const key = JSON.stringify([sourceRevision, source, channel, cat, gen, pg]);
       const persistedKey = JSON.stringify([source, channel, cat, gen, pg]);
+      const queryKey = JSON.stringify([source, channel, cat, gen]);
+      const previousBatch = discoveryPages.get(queryKey);
       // First-page App cards are safe to show as a stale preview; page 2+ depends on a live cursor.
       const canPersist = !source.startsWith('custom:') && (!appCatalog || pg === 1);
       let cached = pageCache.get(key);
@@ -187,8 +190,8 @@ function Browse({ onNavigate, active = true }) {
         setMeta({ ...cached.meta, page: pg });
         setSourceUrl(cached.sourceUrl || fallbackUrl);
       } else {
-        setResults(prev => sameView ? prev : []);
-        setMeta(prev => sameView ? prev : { total: 0, totalPages: 0, genres: [] });
+        setResults(prev => previousBatch?.results || (sameView ? prev : []));
+        setMeta(prev => previousBatch?.meta || (sameView ? prev : { total: 0, totalPages: 0, genres: [] }));
         setSourceUrl(prev => sameView ? prev : fallbackUrl);
       }
       if (!forceRefresh && cached && !appCatalog && Date.now() - cached.savedAt < PAGE_CACHE_TTL_MS) {
@@ -197,7 +200,7 @@ function Browse({ onNavigate, active = true }) {
       }
       setLoading(true);
       // A new query or App first-page request may replace the old cursor chain even without forceRefresh.
-      if (!sameQuery || (appCatalog && (forceRefresh || pg === 1))) setMeta(prev => ({ ...prev, cursorExpired: true }));
+      if ((!sameQuery && !previousBatch) || (appCatalog && (forceRefresh || pg === 1))) setMeta(prev => ({ ...prev, cursorExpired: true }));
       loadingRequest.current = request;
       listTimer.current = setTimeout(() => {
         // A cleanup can invalidate the request without starting another load (e.g. while
@@ -224,7 +227,7 @@ function Browse({ onNavigate, active = true }) {
           sourceUrl: res.sourceUrl || fallbackUrl,
           savedAt: Date.now(),
         };
-        if (!next.results.length && cached && res.unsupported !== true) {
+        if (!next.results.length && (cached || previousBatch) && res.unsupported !== true) {
           throw new Error(res.emptyMessage || '来源这次没有返回片单，请稍后重试。');
         }
         rememberCatalogTitles(next.results);
@@ -232,6 +235,11 @@ function Browse({ onNavigate, active = true }) {
         setMeta(next.meta);
         setSourceUrl(next.sourceUrl);
         if (next.results.length) {
+          if (!cat.startsWith('hot-')) {
+            discoveryPages.delete(queryKey);
+            discoveryPages.set(queryKey, next);
+            if (discoveryPages.size > 24) discoveryPages.delete(discoveryPages.keys().next().value);
+          }
           refreshToFirstPage.current = false;
           if (resettingToFirstPage) {
             setRefreshNotice(`已重新获取 ${next.results.length} 部短剧，已返回第一页。`);
@@ -266,7 +274,7 @@ function Browse({ onNavigate, active = true }) {
         }
       }
     },
-    [invalidateList, source, sourceRevision, catalogChannel, appCatalog, pageCache]
+    [invalidateList, source, sourceRevision, catalogChannel, appCatalog, pageCache, discoveryPages]
   );
 
   useEffect(() => {
@@ -276,13 +284,13 @@ function Browse({ onNavigate, active = true }) {
   useEffect(() => { if (active) loadDownloadedMap(); }, [active, loadDownloadedMap]);
 
   useEffect(() => {
-    invalidateList(); closeDetail(); pageCache.clear();
+    invalidateList(); closeDetail(); pageCache.clear(); discoveryPages.clear();
     refreshFirstPage.current = false;
     refreshToFirstPage.current = false;
     setGenre(''); setPage(1); setResults([]); setMeta({ total: 0, totalPages: 0, genres: [] });
     setRefreshNotice('');
     if (!mediaSources.some(item => item.id === source)) { setSource('hongguo'); setCategory('real-drama'); }
-  }, [sourceRevision, mediaSources, invalidateList, closeDetail]);
+  }, [sourceRevision, mediaSources, invalidateList, closeDetail, discoveryPages]);
 
   useEffect(() => {
     if (active && !sourcesLoading && mediaSources.some(item => item.id === source)) {
@@ -337,9 +345,28 @@ function Browse({ onNavigate, active = true }) {
     setRefreshNotice('');
   };
 
+  const selectDiscoveryBatch = (cat, gen) => {
+    const sameQuery = cat === category && gen === genre;
+    if (sameQuery && loading) return;
+    const previous = discoveryPages.get(JSON.stringify([source, source === 'hongguo' ? catalogChannel : '', cat, gen]))?.meta;
+    const hasMore = previous && (previous.totalPages ? previous.page < previous.totalPages : previous.hasMore);
+    const next = sameQuery && meta.cursorExpired ? 1 : hasMore ? previous.page + 1 : 1;
+    refreshToFirstPage.current = false;
+    if (sameQuery && next === page) return loadList(cat, gen, next, next === 1 || !appCatalog);
+    invalidateList();
+    refreshFirstPage.current = next === 1;
+    setError(''); setRefreshNotice('');
+    if (cat !== category) {
+      setResults([]); setMeta({ total: 0, totalPages: 0, genres: [] });
+    }
+    setCategory(cat); setGenre(gen); setPage(next);
+  };
+
   const switchCategory = (slug) => {
+    if (!slug.startsWith('hot-') && slug !== 'comic') return selectDiscoveryBatch(slug, '');
     if (slug === category) return;
     invalidateList();
+    refreshFirstPage.current = false;
     refreshToFirstPage.current = false;
     setError('');
     setRefreshNotice('');
@@ -351,6 +378,7 @@ function Browse({ onNavigate, active = true }) {
   };
 
   const switchGenre = (slug) => {
+    if (!category.startsWith('hot-') && category !== 'comic') return selectDiscoveryBatch(category, slug);
     if (slug === genre) return;
     invalidateList();
     refreshToFirstPage.current = false;
@@ -520,7 +548,7 @@ function Browse({ onNavigate, active = true }) {
         </div>
       </div>
 
-      <p className="browse-source-note">想看其他短剧，点“换一批”浏览下一页；“刷新片单”重新获取当前片单，来源内容未更新时结果可能相同。{appCatalog && 'App 刷新将回到第一页。'}</p>
+      <p className="browse-source-note">点击分类或题材即可换一批，再点当前分类也能继续换；四个热播榜按来源热度顺序展示。{appCatalog && '“刷新片单”重新获取第一页。'}</p>
       {source === 'hongguo' && <p className="browse-source-note">App 与官网的榜单、题材划分可能不同。</p>}
       {refreshNotice && <p className="browse-source-note" role="status">{refreshNotice}</p>}
 

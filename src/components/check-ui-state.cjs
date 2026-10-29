@@ -648,7 +648,7 @@ async function mount(file, api, props = {}, storage = null) {
       assert.ok(ui.text().includes('这里是图文漫画'));
       ui.button('真人剧').props.onClick(); await ui.flush();
       assert.equal(cards().length, 1, 'returning must restore the retained cache');
-      assert.equal(realCalls, callsAfterRefresh, 'empty refresh must not delete a still-fresh cache');
+      assert.equal(realCalls, callsAfterRefresh + 1, 'returning tries a new batch while retaining the last successful cards');
     } finally { ui.unmount(); }
   });
   await test('closing a loading detail ignores its late result', async () => {
@@ -762,7 +762,7 @@ async function mount(file, api, props = {}, storage = null) {
     ui.button('漫画').props.onClick(); await ui.flush();
     ui.button('真人剧').props.onClick();
     pendingComic.resolve({ success: true, results: [], unsupported: true, emptyMessage: '这里是图文漫画，暂不支持视频下载；看动态漫画请切换“漫剧”。' }); await Promise.resolve(); await Promise.resolve(); await ui.flush();
-    assert.equal(realCalls, callsBeforeSwitch, 'switching back must reuse the website cache without another request');
+    assert.equal(realCalls, callsBeforeSwitch + 1, 'returning to a category must request its next batch or restart at the end');
     assert.ok(ui.text().includes('真人缓存')); assert.ok(!ui.text().includes('这里是图文漫画'));
     ui.button('漫画').props.onClick(); await ui.flush();
     assert.ok(ui.text().includes('这里是图文漫画，暂不支持视频下载'));
@@ -875,6 +875,69 @@ async function mount(file, api, props = {}, storage = null) {
     ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'xifan' } }); await ui.flush();
     assert.equal(ui.find(n => n.props['aria-label'] === '红果目录线路'), undefined);
     assert.equal(calls.at(-1).catalogChannel, undefined, 'other providers must not receive the Hongguo route');
+    ui.unmount();
+  });
+  await test('browse category clicks advance each discovery catalog while four heat rankings stay fixed', async () => {
+    const calls = [];
+    const slugs = ['real-drama', 'comic-drama', 'ai-drama'];
+    const ranks = ['hot-drama', 'hot-real-drama', 'hot-comic-drama', 'hot-ai-drama'];
+    const ui = await mount('Browse', {
+      getSeriesList: async () => [],
+      browseCategories: async () => [...slugs, ...ranks].map(slug => ({ slug, label: slug })),
+      browseList: async request => {
+        calls.push(request);
+        return { success: true, results: [{ series_id: `${request.category}:${request.genre}:${request.page}`, series_title: `${request.category}第${request.page}批` }],
+          hasMore: request.page < 3, genres: request.category.startsWith('hot-') ? [] : [{ slug: 'cate_165', label: '悬疑' }] };
+      },
+    });
+    await ui.flush();
+    for (const slug of slugs) {
+      if (slug !== 'real-drama') { ui.button(slug).props.onClick(); await ui.flush(); }
+      ui.button(slug).props.onClick(); await ui.flush();
+      assert.equal(calls.at(-1).page, 2, `${slug} must advance when clicked again`);
+      assert.ok(ui.text().includes(`${slug}第2批`));
+    }
+    ui.button('real-drama').props.onClick(); await ui.flush();
+    assert.equal(calls.at(-1).page, 3, 'returning to a category continues from its last successful batch');
+    ui.button('悬疑').props.onClick(); await ui.flush();
+    ui.button('悬疑').props.onClick(); await ui.flush();
+    assert.equal(calls.at(-1).genre, 'cate_165');
+    assert.equal(calls.at(-1).page, 2, 'repeated genre clicks also change batch');
+    for (const slug of ranks) {
+      ui.button(slug).props.onClick(); await ui.flush();
+      assert.equal(calls.at(-1).page, 1);
+      const count = calls.length;
+      ui.button(slug).props.onClick(); await ui.flush();
+      assert.equal(calls.length, count, 'repeated ranking clicks must preserve real heat order');
+    }
+    ui.unmount();
+  });
+  await test('browse category batches wrap at the end and retry failed cursors without skipping', async () => {
+    const { fixture, categoryPayload } = require('../../scripts/check-app-catalog.cjs');
+    let fail = true;
+    const h = fixture(call => {
+      if (call.body.offset === 15 && fail) { fail = false; throw Object.assign(new Error('fixture'), { code: 'ECONNRESET' }); }
+      const payload = categoryPayload(String(7000001 + call.body.offset), call.body.offset + 15, call.body.offset < 15, 1);
+      payload.data.video_data[0].title = `换批游标${call.body.offset}`;
+      return payload;
+    });
+    const ui = await mount('Browse', { getSeriesList: async () => [],
+      browseCategories: async () => [{ slug: 'real-drama', label: '真人剧' }], browseList: request => h.browse(request) });
+    await ui.flush();
+    ui.button('真人剧').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('换批游标0'), 'failed category changes keep the previous cards');
+    ui.button('真人剧').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 15, 'the category click retries the failed batch');
+    assert.ok(ui.text().includes('换批游标15'));
+    ui.button('真人剧').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 0, 'last-page category clicks start a new cursor chain');
+    assert.ok(ui.text().includes('换批游标0'));
+    h.advance(121000);
+    ui.button('真人剧').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('分页记录已失效'));
+    ui.button('真人剧').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 0, 'another category click recovers an expired cursor at the first page');
+    assert.ok(!ui.text().includes('分页记录已失效'));
     ui.unmount();
   });
   await test('browse change batch follows real App cursors without repeating the fixed first page', async () => {
