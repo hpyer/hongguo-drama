@@ -48,16 +48,17 @@ function attachCdpResponses(ws) {
   });
 }
 async function clickControl(label) {
-  const point = await evaluate(`(async () => {
+  result.stage = 'pointer-control-' + label;
+  const point = await evaluate(`(() => {
     const button = document.querySelector(${JSON.stringify(`[aria-label="${label}"]`)});
-    button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    await new Promise(requestAnimationFrame);
+    button.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
     const rect = button.getBoundingClientRect();
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   })()`);
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point });
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point });
+  delete result.stage;
 }
 async function keyHandoff(key, code, expectedSource) {
   assert(await evaluate('!document.querySelector("video").paused && getComputedStyle(document.querySelector(".player-controls")).opacity === "0"'), 'Key handoff must begin during hidden-controls playback');
