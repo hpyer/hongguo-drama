@@ -1,6 +1,6 @@
 # 红果短剧 4.4
 
-状态：全部当前改动已纳入统一发行候选，正在进行正式三端构建、签名、公证及发行验收。公开版本 4.4，内部版本 4.4.0。
+**状态：已正式发布。** 4.4（内部 `4.4.0`）已于 2026-10-29 13:44（Asia/Shanghai）正式发布，标签 `v4.4`，冻结源码 `23860cfde09d953a7b1f1cbe9e20b433dd4b0e18`。三端 16 项附件远端 SHA256 与大小逐项匹配。双 Mac App/DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订；Windows CI 40822817019 的便携播放、安装、重装和真实 1.80 升级资料保留通过，EXE 未签名。
 
 ## 本轮统一变化
 
@@ -32,4 +32,14 @@
 
 证据：`.planning/issue-68-4.4/real-media-result.json`、`live-recovery-result.json`、`package-verification-final.json`。
 
-未跑全量测试、Windows/Intel 实机或长期播放。测试包仅临时签名，未正式签名、公证、安装替换或发布。第三方接口可能再次变化，当前样本成功不代表所有地区或作品。
+冻结源码 Test CI 和 Windows CI 全量通过：212 项单元测试、96 项平台检查；Windows 便携 11 项、安装升级 9 项检查通过。Windows 真实红果下载、H.264/AAC 播放、快捷切集、自动连播、全屏和控件显示经过隔离验证。
+
+签名 arm64 包另在应用内随机选择《逃婚三年，江少的花心人设崩了》前两集并真实下载，全程强制静音且界面音量0%。实际播放23.2秒和9.9秒后暂停，自带画中画标题与23.2秒暂停进度往返通过；x64包在Apple Silicon上经Rosetta隔离启动/正常退出通过。两种最终DMG只读挂载、App和DMG签名/票据、精确源码与媒体节比对通过；更新ZIP从已装订App重新生成并核对SHA512。
+
+未替换本机正式安装，未覆盖实体Intel/Windows/GPU、干净Gatekeeper、长期播放/登录、人工听音或完整跨版本应用内自动更新。第三方接口可能再次变化，样本成功不代表所有地区或作品。
+
+## 发行回执
+
+- 冻结提交：`23860cfde09d953a7b1f1cbe9e20b433dd4b0e18`。
+- [Windows CI](https://github.com/jackotom/hongguo-drama/actions/runs/40822817019)：真实素材播放、安装及升级通过。
+- `.planning/release-4.4/` 保存三端资产、精确源码、四份Apple公证回执及全部校验；私有资料、测试视频与本地回执不进入公开源码。
