@@ -1,5 +1,7 @@
 # 同步发行规则
 
+4.5（内部 `4.5.0`）为本轮发行目标，尚未发布。发现页新增“换一批”，最终回执见 [4.5说明](release-4.5.md)。
+
 4.4（内部 `4.4.0`）已于 2026-10-29 13:44（Asia/Shanghai）正式发布，标签 `v4.4`，冻结源码 `23860cfde09d953a7b1f1cbe9e20b433dd4b0e18`。三端 16 项附件远端 SHA256 与大小逐项匹配。双 Mac App/DMG 已完成 Developer ID 签名、Apple 公证 Accepted 和装订；Windows CI 40822817019 的便携播放、安装、重装和真实 1.80 升级资料保留通过，EXE 未签名。 详见 [4.4说明](release-4.4.md)。
 
 上一正式版为 **4.3**（内部 `4.3.0`）。4.3（内部 `4.3.0`）已于 2026-10-28 20:26（Asia/Shanghai）正式发布，标签 `v4.3`。冻结源码 `81f354d48e1c163eb9b5b419cd5faa855f5fd1da`；三端16项附件远端SHA256与大小逐项匹配，10个匿名入口通过。双Mac App与DMG已完成Developer ID签名、Apple公证Accepted和装订；Windows CI 40672013430便携媒体、安装、重装和真实1.80升级资料保留检查通过，EXE未签名。详见 [4.3说明](release-4.3.md)。
@@ -67,7 +69,7 @@ Windows 当前未配置代码签名证书；EXE 必须明确标为未签名。Wi
 
 Ubuntu 24.04 安装 gcc-mingw-w64-x86-64、make、pkg-config 后运行 `bash scripts/build-ffmpeg-source-win.sh BUILD_DIRECTORY 4`。
 将 artifacts/bin 内容放入 build/ffmpeg。Windows x64、Node 22.12+ 执行 `npm ci`、`npm run build:portable`，再执行 `npx electron-builder --win nsis --x64 --publish never`。
-`node scripts/check-windows-release.cjs` 仅用于一次性 Windows CI：便携 EXE 直接启动、临时用户资料、普通 CC0 花朵视频；不要对用户现有安装运行。
+`node scripts/check-windows-release.cjs` 仅用于一次性 Windows CI：便携 EXE 直接启动、临时用户资料、本轮随机真实下载的红果两集；全程静音；不要对用户现有安装运行。
 旧 `scripts/setup-ffmpeg.js` 下载 Gyan 7.1 仅保留作历史开发入口，不得用于 1.1.9 正式发行。
 
 发布必须同时提供应用精确源码 ZIP 与 FFmpeg/x264 Windows 完整对应源码 TAR.GZ。不得遗漏 Windows 专用配置、工作流和构建脚本。

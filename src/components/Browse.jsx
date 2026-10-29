@@ -486,6 +486,7 @@ function Browse({ onNavigate, active = true }) {
   // Keep the label and navigation anchored to the cards that actually loaded.
   const displayedPage = meta.page || page;
   const totalPages = meta.totalPages || 0;
+  const hasNextBatch = results.length > 0 && (totalPages ? displayedPage < totalPages : meta.hasMore);
   const pageNumbers = useMemo(() => {
     if (!totalPages) return [];
     const out = [];
@@ -509,6 +510,7 @@ function Browse({ onNavigate, active = true }) {
           <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select></label>
           {source === 'hongguo' && <label className="source-control">目录线路<select className="input-field" aria-label="红果目录线路" value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">App（快速 · 部分片单）</option><option value="web">官网（完整目录）</option></select></label>}
           <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />搜索短剧</button>
+          <button className="btn btn-outline" disabled={loading || sourcesLoading || meta.cursorExpired || page !== displayedPage || !hasNextBatch} onClick={() => gotoPage(displayedPage + 1)}><RefreshCw size={15} />换一批</button>
           <button className="btn btn-outline" disabled={loading || sourcesLoading} onClick={refreshList}><RefreshCw size={15} />刷新片单</button>
           {meta.total > 0 && <span className="browse-stat">共 {meta.total} 部</span>}
           {source === 'hongguo' && catalogChannel === 'web' && sourceUrl && <button className="btn btn-outline" onClick={showBrowser}>
@@ -518,7 +520,8 @@ function Browse({ onNavigate, active = true }) {
         </div>
       </div>
 
-      {source === 'hongguo' && <p className="browse-source-note">App 与官网的榜单、题材划分可能不同。{appCatalog && '刷新将回到第一页。'}</p>}
+      <p className="browse-source-note">想看其他短剧，点“换一批”浏览下一页；“刷新片单”重新获取当前片单，来源内容未更新时结果可能相同。{appCatalog && 'App 刷新将回到第一页。'}</p>
+      {source === 'hongguo' && <p className="browse-source-note">App 与官网的榜单、题材划分可能不同。</p>}
       {refreshNotice && <p className="browse-source-note" role="status">{refreshNotice}</p>}
 
       {/* 分类 tab */}

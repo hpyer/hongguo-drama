@@ -877,6 +877,64 @@ async function mount(file, api, props = {}, storage = null) {
     assert.equal(calls.at(-1).catalogChannel, undefined, 'other providers must not receive the Hongguo route');
     ui.unmount();
   });
+  await test('browse change batch follows real App cursors without repeating the fixed first page', async () => {
+    const { fixture, categoryPayload } = require('../../scripts/check-app-catalog.cjs');
+    let fail = false;
+    const h = fixture(call => {
+      if (fail) throw Object.assign(new Error('fixture reset'), { code: 'ECONNRESET' });
+      const offset = call.body.offset;
+      const payload = categoryPayload(String(7000001 + offset), offset + 15, offset < 30, 1);
+      payload.data.video_data[0].title = `真实游标片单${offset}`;
+      return payload;
+    });
+    const ui = await mount('Browse', {
+      getSeriesList: async () => [], browseCategories: async () => [],
+      browseList: options => h.browse(options),
+    });
+    await ui.flush();
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('来源返回的短剧及顺序未变化'));
+    assert.ok(ui.text().includes('换一批'), 'fixed first-page results need a visible way to discover different dramas');
+    ui.button('换一批').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 15);
+    assert.ok(ui.text().includes('真实游标片单15'));
+    assert.ok(!ui.text().includes('真实游标片单0'));
+    fail = true;
+    ui.button('换一批').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('真实游标片单15'), 'failed next batches keep the loaded cards');
+    assert.equal(ui.button('换一批').props.disabled, true, 'failed page transitions must be retried before skipping ahead');
+    fail = false;
+    await ui.button('重试').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 30, 'retry must retain the same cursor');
+    assert.ok(ui.text().includes('真实游标片单30'));
+    assert.equal(ui.button('换一批').props.disabled, true, 'the last page has no invented next batch');
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.equal(h.calls.at(-1).body.offset, 0);
+    assert.equal(ui.button('换一批').props.disabled, false, 'refresh must start a new usable cursor chain');
+    ui.unmount();
+  });
+  await test('browse change batch supports numbered catalogs and preserves genre filters', async () => {
+    const calls = [];
+    const ui = await mount('Browse', {
+      getSeriesList: async () => [], browseCategories: async () => [],
+      browseList: async options => {
+        calls.push(options);
+        return { success: true, results: [{ series_id: `xifan:A:${options.page}`, series_title: `分类片单${options.page}` }],
+          total: 4, totalPages: 2, genres: [{ slug: 'romance', label: '爱情' }] };
+      },
+    });
+    await ui.flush();
+    ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'xifan' } }); await ui.flush();
+    ui.button('爱情').props.onClick(); await ui.flush();
+    assert.ok(ui.button('换一批'));
+    ui.button('换一批').props.onClick(); await ui.flush();
+    assert.equal(calls.at(-1).page, 2);
+    assert.equal(calls.at(-1).source, 'xifan');
+    assert.equal(calls.at(-1).genre, 'romance');
+    assert.ok(ui.text().includes('分类片单2'));
+    assert.equal(ui.button('换一批').props.disabled, true);
+    ui.unmount();
+  });
   await test('browse forced catalog refresh reports recovery and isolates stale results', async () => {
     const { fixture, categoryPayload, rankPayload } = require('../../scripts/check-app-catalog.cjs');
     let mode = 'ok', resolveLate;
