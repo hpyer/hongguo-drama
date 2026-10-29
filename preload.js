@@ -1,4 +1,4 @@
-// 红果短剧 4.5：桌面桥接入口，发行说明见 docs/release-4.5.md。
+// 红果短剧 4.6：桌面桥接入口，发行说明见 docs/release-4.6.md。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -181,6 +181,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getWindowLayout: () => ipcRenderer.invoke('get-window-layout'),
   setWindowLayout: (mode) => ipcRenderer.invoke('set-window-layout', mode),
+  changeWindowZoom: (direction) => ipcRenderer.invoke('change-window-zoom', direction),
+  onInterfaceZoomChanged: (cb) => {
+    const listener = (_event, zoom) => cb(zoom);
+    ipcRenderer.on('interface-zoom-changed', listener);
+    return () => ipcRenderer.removeListener('interface-zoom-changed', listener);
+  },
   getAlwaysOnTop: () => ipcRenderer.invoke('get-always-on-top'),
   setAlwaysOnTop: (value) => ipcRenderer.invoke('set-always-on-top', value),
   setEpisodePanelOpen: (value) => ipcRenderer.invoke('set-episode-panel-open', value),

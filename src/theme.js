@@ -1,5 +1,26 @@
 const STORAGE_KEY = 'hongguo-experience-preview:theme';
 const PREFERENCES = ['system', 'light', 'dark'];
+const POSTER_SIZE_KEY = 'hongguo-experience-preview:poster-size';
+const POSTER_SIZES = ['small', 'standard', 'large', 'extra-large'];
+
+export function getPosterSize() {
+  try {
+    const stored = window.localStorage.getItem(POSTER_SIZE_KEY);
+    return POSTER_SIZES.includes(stored) ? stored : 'standard';
+  } catch {
+    return 'standard';
+  }
+}
+
+export function initializePosterSize() {
+  document.documentElement.dataset.posterSize = getPosterSize();
+}
+
+export function setPosterSize(size) {
+  if (!POSTER_SIZES.includes(size)) throw new Error('请选择有效的海报大小');
+  window.localStorage.setItem(POSTER_SIZE_KEY, size);
+  initializePosterSize();
+}
 
 export function getThemePreference() {
   try {

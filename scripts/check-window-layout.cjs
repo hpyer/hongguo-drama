@@ -57,3 +57,35 @@ for (const file of fs.readdirSync(sourceRoot, { recursive: true }).filter(file =
   });
 }
 console.log('PASS responsive CSS preserves font sizes across window dimensions');
+
+// Appearance preferences use the same local profile as the existing theme.
+const vm = require('node:vm');
+const { transformSync } = require('esbuild');
+const memory = new Map();
+let failStorage = false;
+const dataset = {};
+const appearance = { module: { exports: {} }, window: { localStorage: {
+  getItem: key => memory.get(key) ?? null,
+  setItem(key, value) { if (failStorage) throw Error('disk full'); memory.set(key, value); },
+} }, document: { documentElement: { dataset } } };
+vm.runInNewContext(transformSync(fs.readFileSync(path.join(sourceRoot, 'theme.js'), 'utf8'), { format: 'cjs' }).code, appearance);
+const { getPosterSize, setPosterSize, initializePosterSize } = appearance.module.exports;
+assert.equal(typeof getPosterSize, 'function', 'poster size preference is available');
+assert.equal(getPosterSize(), 'standard');
+initializePosterSize();
+assert.equal(dataset.posterSize, 'standard');
+for (const size of ['small', 'standard', 'large', 'extra-large']) {
+  setPosterSize(size);
+  assert.equal(getPosterSize(), size);
+  assert.equal(dataset.posterSize, size);
+}
+assert.throws(() => setPosterSize('invalid'));
+assert.equal(getPosterSize(), 'extra-large');
+failStorage = true;
+assert.throws(() => setPosterSize('small'), /disk full/);
+assert.equal(dataset.posterSize, 'extra-large', 'failed persistence preserves visible size');
+failStorage = false;
+memory.set('hongguo-experience-preview:poster-size', 'invalid');
+initializePosterSize();
+assert.equal(dataset.posterSize, 'standard', 'invalid stored values fall back safely');
+console.log('PASS poster size: presets, startup restore, invalid values and failed saves');

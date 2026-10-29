@@ -245,7 +245,7 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
         <div><h2>设置</h2><p className="page-description">让下载、保存和网络连接，按你的习惯运行。</p></div>
       </div>
 
-      <section className="settings-card" aria-label="外观设置"><AppearanceSettings /></section>
+      <section className="settings-card" aria-label="外观设置"><AppearanceSettings active={active} /></section>
       <ShortcutSettings active={active} />
       <section className="settings-card" aria-label="画中画小窗设置">
         <div className="settings-group">

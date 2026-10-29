@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 4.5 下载器（独立版）主进程
+ * main.js - 红果短剧 4.6 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -225,6 +225,7 @@ function getDefaultSettings() {
     // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index) 标题(ep_title)
     name_format: '剧名 集数',
     max_concurrent: 3,
+    ui_zoom: 1,
     download_quality: 'auto',
     custom_sources: [],
     // 看完一集后自动删除本地文件（边看边清，避免占用磁盘）
@@ -4827,14 +4828,20 @@ function syncMainWindowScale() {
   mainWindow.webContents.setZoomFactor(scale);
 }
 function changeMainWindowZoom(direction) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '主窗口不可用' };
   try {
     saveWindowZoom(store, direction);
     syncMainWindowScale();
+    const zoom = getWindowScale(getCurrentSettings().ui_zoom);
+    sendToRenderer('interface-zoom-changed', zoom);
+    return { success: true, zoom };
   } catch (_) {
-    sendToRenderer('storage-error', { error: '界面大小保存失败，请检查磁盘空间或目录权限后重试。' });
+    const error = '界面大小保存失败，请检查磁盘空间或目录权限后重试。';
+    sendToRenderer('storage-error', { error });
+    return { success: false, error };
   }
 }
+ipcMain.handle('change-window-zoom', (_event, direction) => changeMainWindowZoom(direction));
 ipcMain.handle('set-stealth-mode', async (event, enabled) => {
   if (!mainWindow || event.sender !== mainWindow.webContents || typeof enabled !== 'boolean') return { success: false, error: '无法切换小窗' };
   if (enabled && (mainWindow.isFullScreen() || layoutChanging)) return { success: false, error: '请先退出全屏，再开启隐身小窗' };
