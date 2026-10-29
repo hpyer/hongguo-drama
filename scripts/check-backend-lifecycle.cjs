@@ -8,7 +8,7 @@ function fixture(platform = 'darwin', options = {}) {
   const handlers = {}, app = new EventEmitter(), windows = [], state = { quits: 0, requests: [], errors: [], mergeSaves: [] };
   Object.assign(app, { getVersion: () => 'test', getPath: () => root, requestSingleInstanceLock: () => true,
     commandLine: { appendSwitch() {} }, whenReady: () => ({ then() {} }), quit: () => state.quits++ });
-  const store = { getSettings: () => ({ root }), setErrorHandler: fn => state.storage = fn, saveTasks() {},
+  const store = { getSettings: () => ({ root }), saveSettings() {}, setErrorHandler: fn => state.storage = fn, saveTasks() {},
     saveMergeTasks: tasks => state.mergeSaves.push(JSON.parse(JSON.stringify(tasks))) };
   class Window extends EventEmitter {
     constructor(options) { super(); this.options = options; windows.push(this); this.webContents = new EventEmitter(); this.webContents.setWindowOpenHandler = () => {}; this.webContents.setZoomFactor = value => { this.zoomFactor = value; }; }

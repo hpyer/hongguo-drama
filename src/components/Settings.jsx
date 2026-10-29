@@ -57,29 +57,37 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
   const [testing, setTesting] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pictureModeSaving, setPictureModeSaving] = useState(false);
+  const [pictureModeNotice, setPictureModeNotice] = useState('');
+  const [pictureModeError, setPictureModeError] = useState('');
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
   const testVersion = useRef(0);
   const savingRef = useRef(false);
+  const pictureModeRequest = useRef({ pending: false, version: 0 });
   const editedKeys = useRef(new Set());
   const savedTimer = useRef(null);
 
   const loadSettings = async () => {
     setLoadError('');
-    try { setSettings({ download_quality: 'auto', ...await window.electronAPI.getSettings() }); }
+    try { setSettings({ download_quality: 'auto', picture_in_picture_mode: 'custom', ...await window.electronAPI.getSettings() }); }
     catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
   };
 
   // 重新进入设置页时同步播放器里刚改过的共享选项；保留用户未保存的字段。
   const refreshSettings = async () => {
     if (savingRef.current) return;
+    const modeVersion = pictureModeRequest.current.version;
     try {
-      const fresh = { download_quality: 'auto', ...await window.electronAPI.getSettings() };
+      const fresh = { download_quality: 'auto', picture_in_picture_mode: 'custom', ...await window.electronAPI.getSettings() };
       setSettings(prev => {
-        if (!prev || !editedKeys.current.size) return fresh;
+        if (!prev) return fresh;
         const merged = { ...fresh };
         for (const key of editedKeys.current) {
           if (Object.hasOwn(prev, key)) merged[key] = prev[key];
+        }
+        if (pictureModeRequest.current.pending || modeVersion !== pictureModeRequest.current.version) {
+          merged.picture_in_picture_mode = prev.picture_in_picture_mode;
         }
         return merged;
       });
@@ -107,6 +115,31 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
     setSaved(false);
     setDirty(true);
     setSaveError('');
+  };
+
+  const changePictureInPictureMode = async (event) => {
+    const mode = event.target.value;
+    const request = pictureModeRequest.current;
+    if (!['native', 'custom'].includes(mode) || request.pending) return;
+    request.pending = true;
+    request.version++;
+    const previous = settings.picture_in_picture_mode === 'native' ? 'native' : 'custom';
+    setSettings(prev => ({ ...prev, picture_in_picture_mode: mode }));
+    setPictureModeSaving(true);
+    setPictureModeNotice('');
+    setPictureModeError('');
+    try {
+      const result = await window.electronAPI.saveSettings({ picture_in_picture_mode: mode });
+      if (!result?.success) throw new Error(result?.error || '画中画小窗设置保存失败，请重试');
+      setPictureModeNotice('已自动保存，下次开启悬浮窗时生效');
+    } catch (error) {
+      setSettings(prev => ({ ...prev, picture_in_picture_mode: previous }));
+      setPictureModeError(error.message || '画中画小窗设置保存失败，请重试');
+    } finally {
+      request.pending = false;
+      request.version++;
+      setPictureModeSaving(false);
+    }
   };
 
   const selectFolder = async () => {
@@ -214,6 +247,22 @@ function SettingsPage({ active = true, preview = false, appInfo = null }) {
 
       <section className="settings-card" aria-label="外观设置"><AppearanceSettings /></section>
       <ShortcutSettings active={active} />
+      <section className="settings-card" aria-label="画中画小窗设置">
+        <div className="settings-group">
+          <label className="settings-label" htmlFor="picture-in-picture-mode">画中画小窗</label>
+          <select id="picture-in-picture-mode" className="input-field select-field"
+            value={settings.picture_in_picture_mode === 'native' ? 'native' : 'custom'}
+            disabled={!active || saving || pictureModeSaving}
+            aria-describedby="picture-in-picture-mode-hint"
+            onChange={changePictureInPictureMode}>
+            <option value="native">系统原生</option>
+            <option value="custom">应用自带</option>
+          </select>
+          <p className="settings-hint" id="picture-in-picture-mode-hint">选择立即自动保存。已打开的小窗不会被中断或切换，下次开启时生效。系统原生使用操作系统的画中画能力；应用自带可显示当前剧名，并支持返回主窗口。</p>
+          {(pictureModeSaving || pictureModeNotice) && <p className="settings-hint" role="status">{pictureModeSaving ? '正在保存…' : pictureModeNotice}</p>}
+          {pictureModeError && <p className="appearance-error" role="alert">{pictureModeError}</p>}
+        </div>
+      </section>
       <BuiltinSources />
       <CustomSources active={active} />
       <p className="settings-hint">播放页顶部可开启小窗模式：窗口缩小、置顶并在支持的系统上跨虚拟桌面可见；鼠标移开时暂停隐藏，移回继续，Esc 或 Dock 可恢复主窗口。</p>

@@ -27,6 +27,7 @@ function listHistory(series, playback, showSequels = true) {
       unreadEpisodes: record.unreadEpisodes || 0, sequels,
       hasUpdates: record.unreadEpisodes > 0 || sequels.some(candidate => !seen.has(candidate.series_id)),
       season, isLatestSeason: !!family && season === latestByFamily.get(family),
+      hasHigherSeason: !!family && season < latestByFamily.get(family),
       lastCheckedAt: record.lastCheckedAt || 0, lastCheckError: record.lastCheckError || '',
       lastEpisodeCheckError: record.lastEpisodeCheckError || '', lastSequelCheckError: record.lastSequelCheckError || '',
     };

@@ -24,7 +24,7 @@ const MENU = [
   { id: 'history', label: '观看记录', icon: Clock },
   { id: 'calendar', label: '收藏与上新', icon: Clock },
   { id: 'manager', label: '下载管理', icon: Download },
-  { id: 'account', label: '登录管理', icon: User },
+  { id: 'account', label: '红果账号', icon: User },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 
@@ -48,6 +48,8 @@ export default function App() {
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
   const [playerMounted, setPlayerMounted] = useState(false);
+  const floatingPlayer = useRef(false);
+  const setFloatingPlayer = useCallback(value => { floatingPlayer.current = value; }, []);
   const [playerTarget, setPlayerTarget] = useState(null); // 浏览页点播 -> 播放页选中
   const rememberPlayerSeries = useCallback((seriesId) => {
     // 保留命令时间戳避免重复初始化；重新挂载时只按当前系列的最新断点恢复。
@@ -83,7 +85,7 @@ export default function App() {
       setCalendarOpening('');
       pageRef.current = nextPage;
     }
-    if (nextPage === 'player' || nextPage === 'feed') setPlayerMounted(nextPage === 'player');
+    if (nextPage === 'player' || (nextPage === 'feed' && !floatingPlayer.current)) setPlayerMounted(nextPage === 'player');
     setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
   };
@@ -93,7 +95,7 @@ export default function App() {
       case 'browse':
         return <Browse active={page === id} onNavigate={navigate} />;
       case 'player':
-        return playerMounted ? <Player portrait={layout === 'portrait'} episodesOpen={episodesOpen} setEpisodesOpen={setEpisodesOpen} actionsHidden={actionsHidden || (borderless && layout === 'portrait')} active={page === id} target={playerTarget} onSeriesSelected={rememberPlayerSeries} onNavigate={navigate} /> : null;
+        return playerMounted ? <Player portrait={layout === 'portrait'} episodesOpen={episodesOpen} setEpisodesOpen={setEpisodesOpen} actionsHidden={actionsHidden || (borderless && layout === 'portrait')} active={page === id} target={playerTarget} onSeriesSelected={rememberPlayerSeries} onFloatingChange={setFloatingPlayer} onNavigate={navigate} /> : null;
       case 'feed':
         return page === 'feed' ? <DramaFeed onNavigate={navigate} /> : null;
       case 'calendar':
@@ -177,7 +179,7 @@ export default function App() {
         <div className="sidebar-footer">
           <button className={`sidebar-item ${page === 'account' ? 'active' : ''}`}
             aria-current={page === 'account' ? 'page' : undefined} onClick={() => navigate('account')}>
-            <User size={19} /><span>登录管理</span>
+            <User size={19} /><span>红果账号</span>
           </button>
           <button className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
             aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>

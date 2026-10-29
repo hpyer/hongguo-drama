@@ -1,9 +1,9 @@
-// Run the single-file portable EXE on disposable Windows CI with an isolated profile and CC0 footage.
+// Run the 4.4 portable EXE on disposable Windows CI with isolated, real Hongguo footage and muted audio.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const pkg = require('../package.json');
 const root = path.resolve(__dirname, '..');
@@ -100,6 +100,44 @@ async function keyHandoff(key, code, expectedSource) {
   if (expectedSource) assert.equal(state.source, expectedSource, key + ' must select the expected episode');
   return state;
 }
+
+async function realFootage(mediaDir, ffmpeg) {
+  const native = require('../src/native/hongguo');
+  const catalog = await require('../src/native/hongguo-app-catalog').browseList({ category: 'hot-real-drama' });
+  assert(catalog.success && catalog.results.length, 'Real Hongguo catalog unavailable; do not substitute footage');
+  const drama = catalog.results[Math.floor(Math.random() * catalog.results.length)];
+  const series = await native.fetchEpisodeList(drama.series_id);
+  assert(series.episodes.length >= 2, 'Real acceptance drama needs two episodes');
+  const start = Math.floor(Math.random() * Math.min(10, series.episodes.length - 1));
+  const episodes = series.episodes.slice(start, start + 2), samples = [];
+  for (const [index, episode] of episodes.entries()) {
+    const info = await native.fetchPlayUrlSingle(episode.vid, series.series_id, { force: true });
+    assert(info.url, 'Real Hongguo episode source unavailable; do not substitute footage');
+    const encrypted = path.join(mediaDir, `original-${index}.mp4`);
+    try {
+      const response = await require('axios').get(info.url, {
+        ...require('../src/native/web-media-guard').webMediaRequestOptions(info.url),
+        headers: { 'User-Agent': info.userAgent || native.UA, Referer: native.VIDEO_REFERER },
+        responseType: 'arraybuffer', timeout: 60000, maxContentLength: 128 * 1024 * 1024,
+      });
+      assert(response.data.byteLength > 0);
+      fs.writeFileSync(encrypted, response.data);
+    } catch (_) { throw new Error('Real Hongguo acceptance video download failed; no media URL logged'); }
+    const sample = path.join(mediaDir, `windows-sample-${index + 1}.mp4`);
+    const key = info.contentKey || (info.spadeA ? native.deriveKey(info.spadeA)?.toString('hex') : '');
+    const decoded = spawnSync(ffmpeg, ['-y', '-v', 'error', ...(key ? ['-decryption_key', key] : []),
+      '-i', encrypted, '-t', '15', '-map', '0:v:0', '-map', '0:a:0', '-vf', 'scale=640:360',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', sample],
+      { timeout: 60000, windowsHide: true, stdio: 'pipe' });
+    assert.equal(decoded.status, 0, 'Real Hongguo acceptance video could not be decoded');
+    fs.unlinkSync(encrypted);
+    samples.push(sample);
+  }
+  result.realMedia = { seriesId: series.series_id, title: series.series_title,
+    episodes: episodes.map(episode => ({ vid: episode.vid, index: episode.vid_index })),
+    downloadedFromOfficialSource: true, muted: true, durationPerSampleSeconds: 15 };
+  return samples;
+}
 (async () => {
   assert.equal(process.platform, 'win32');
   assert.equal(process.arch, 'x64');
@@ -121,7 +159,7 @@ async function keyHandoff(key, code, expectedSource) {
   const portablePort = 9438;
   const isolatedAppData = path.join(temp, 'portable-appdata');
   fs.mkdirSync(isolatedAppData, { recursive: true });
-  const portableChild = spawn(portableCopy, ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + portablePort], { stdio: 'ignore', env: { ...process.env, APPDATA: isolatedAppData } });
+  const portableChild = spawn(portableCopy, ['--mute-audio', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + portablePort], { stdio: 'ignore', env: { ...process.env, APPDATA: isolatedAppData } });
   try {
     let target;
     for (let i = 0; i < 150; i++) {
@@ -171,24 +209,18 @@ async function keyHandoff(key, code, expectedSource) {
   const sid = 'windows-smoke';
   let fixtureEpisodes = [];
   if (!skipPlayback) {
-    const sample = path.join(mediaDir, 'windows-sample.mp4');
-    const response = await fetch('https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4');
-    assert(response.ok, 'CC0 fixture download failed');
-    const flower = Buffer.from(await response.arrayBuffer());
-    assert.equal(createHash('sha256').update(flower).digest('hex'), '0cd83d944a6ca7822b4a8306cecc60a36e859b041f6702c6a1ad9ead78924451');
-    const original = path.join(mediaDir, 'flower-original.mp4'); fs.writeFileSync(original, flower);
-    execFileSync(ffmpeg, ['-y', '-v', 'error', '-stream_loop', '2', '-i', original, '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-map', '0:v:0', '-map', '1:a:0', '-t', '15', '-vf', 'scale=640:360', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', sample], { timeout: 30000, windowsHide: true });
-    const probe = JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_streams', '-of', 'json', sample], { encoding: 'utf8', windowsHide: true }));
-    assert(probe.streams.some(s => s.codec_name === 'h264'));
-    assert(probe.streams.some(s => s.codec_name === 'aac'));
-    result.checks.push('Bundled FFmpeg encodes H.264/AAC; FFprobe reads output');
-    const secondSample = path.join(mediaDir, 'windows-sample-2.mp4');
-    fs.copyFileSync(sample, secondSample);
-    fixtureEpisodes = [sample, secondSample].map((savePath, index) => ({ id: `fixture-${index + 1}`, status: 'completed', savePath, hongguoInfo: { series_id: sid, series_title: 'Windows verification', vid: `fixture-${index + 1}`, vid_index: index + 1 } }));
+    const samples = await realFootage(mediaDir, ffmpeg);
+    for (const sample of samples) {
+      const probe = JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_streams', '-of', 'json', sample], { encoding: 'utf8', windowsHide: true }));
+      assert(probe.streams.some(s => s.codec_name === 'h264'));
+      assert(probe.streams.some(s => s.codec_name === 'aac'));
+    }
+    result.checks.push('Bundled FFmpeg decodes two real downloaded Hongguo episodes to H.264/AAC; FFprobe reads output');
+    fixtureEpisodes = samples.map((savePath, index) => ({ id: `fixture-${index + 1}`, status: 'completed', savePath, hongguoInfo: { series_id: sid, series_title: 'Windows verification', vid: `fixture-${index + 1}`, vid_index: index + 1 } }));
   }
   // Keep remote notices from covering trusted pointer playback checks in this disposable profile.
-  fs.writeFileSync(path.join(profile, 'data.json'), JSON.stringify({ announcement: { preferences: { normalEnabled: false, emergencyEnabled: false } }, settings: { root: mediaDir, watch_updates_enabled: false, watch_sequels_enabled: false }, tasks: fixtureEpisodes, series: skipPlayback ? [] : [{ series_id: sid, series_title: 'Windows verification', episodes: fixtureEpisodes.map(task => ({ ...task.hongguoInfo, title: 'CC0 flower footage' })) }] }));
-  child = spawn(portable, ['--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9439', '--autoplay-policy=no-user-gesture-required'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(profile, 'data.json'), JSON.stringify({ announcement: { preferences: { normalEnabled: false, emergencyEnabled: false } }, settings: { root: mediaDir, watch_updates_enabled: false, watch_sequels_enabled: false, cache_next_episode: false }, tasks: fixtureEpisodes, series: skipPlayback ? [] : [{ series_id: sid, series_title: 'Windows verification', episodes: fixtureEpisodes.map(task => ({ ...task.hongguoInfo, title: 'Real Hongguo acceptance footage' })) }] }));
+  child = spawn(portable, ['--mute-audio', '--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9439', '--autoplay-policy=no-user-gesture-required'], { stdio: 'ignore' });
   let target;
   for (let i = 0; i < 150; i++) {
     try { target = (await (await fetch('http://127.0.0.1:9439/json')).json()).find(t => t.type === 'page' && t.url.startsWith('file:')); } catch {}
@@ -308,7 +340,7 @@ async function keyHandoff(key, code, expectedSource) {
   result.mediaCapability.originCleanCanvas = true;
   const paused = await evaluate(`(async () => { document.querySelector('[aria-label="暂停"]').click(); await new Promise(r=>setTimeout(r,100)); return document.querySelector('video').paused; })()`);
   assert.equal(paused, true);
-  result.checks.push('Actual application player plays CC0 flower H.264/AAC through local protocol; pause control works');
+  result.checks.push('Actual application player plays real Hongguo H.264/AAC through local protocol with forced mute; pause control works');
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(out, 'portable-windows-playback.png'), Buffer.from(screenshot.data, 'base64'));
   await clickControl('全屏');
@@ -387,7 +419,7 @@ async function keyHandoff(key, code, expectedSource) {
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 120, y: 120 });
   await delay(250);
   assert(await evaluate('getComputedStyle(document.querySelector(".player-controls")).opacity === "1"'), 'Pointer movement after automatic next episode must restore controls');
-  result.checks.push('Actual single-file EXE: after default ArrowUp returns to the previous episode, natural ended advances through Player to the expected second local flower episode; every sampled frame retains hidden controls and fullscreen; pointer movement restores controls');
+  result.checks.push('Actual single-file EXE: after default ArrowUp returns to the previous episode, natural ended advances through Player to the expected second real Hongguo episode; every sampled frame retains hidden controls and fullscreen; pointer movement restores controls');
   await clickControl('退出全屏');
   await delay(2400);
   assert(await evaluate('!document.fullscreenElement && !document.querySelector("video").paused && getComputedStyle(document.querySelector(".player-controls")).opacity === "0"'), 'Ordinary landscape must hide idle controls after exiting fullscreen');

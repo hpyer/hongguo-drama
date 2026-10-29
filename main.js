@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧 4.3 下载器（独立版）主进程
+ * main.js - 红果短剧 4.4 下载器（独立版）主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -62,6 +62,7 @@ const { exportSeriesText } = require('./src/native/text-export');
 const mediaAccess = require('./src/native/media-access').createMediaAccess(process.env.VITE_DEV_SERVER_URL);
 const rendererSecurity = require('./src/native/renderer-security').createRendererSecurity(
   path.join(__dirname, 'dist-react', 'index.html'), process.env.VITE_DEV_SERVER_URL);
+const attachFloatingPlayerWindow = require('./src/native/floating-player-window');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
 const APP_TITLE = IS_PREVIEW ? '红果短剧预览' : '红果短剧';
@@ -231,6 +232,7 @@ function getDefaultSettings() {
     // 兼容模式：本机无法解码 HEVC 时自动转码为 H.264（解决「黑屏有声」）
     compat_mode: true,
     cache_next_episode: true,
+    picture_in_picture_mode: 'custom',
     app_updates_enabled: !IS_PREVIEW,
     watch_updates_enabled: true,
     watch_sequels_enabled: true,
@@ -4089,7 +4091,7 @@ ipcMain.handle('select-folder', async () => {
   return result.filePaths[0];
 });
 
-const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'export_text', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
+const SETTINGS_KEYS = ['root', 'name_format', 'max_concurrent', 'download_quality', 'export_text', 'auto_delete_watched', 'compat_mode', 'cache_next_episode', 'picture_in_picture_mode', 'show_danmaku_controls', 'app_updates_enabled', 'watch_updates_enabled', 'watch_sequels_enabled', 'watch_notifications_enabled', 'search_app_enabled', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
 
 function normalizeTextExportKinds(value) {
   return { danmaku: value?.danmaku === true, comments: value?.comments === true, reviews: value?.reviews === true };
@@ -4104,6 +4106,8 @@ function settingsForRenderer(settings) {
 
 function applyEditableSettings(current, incoming) {
   const source = normalizeProxySettings(incoming && typeof incoming === 'object' ? incoming : {});
+  if (Object.prototype.hasOwnProperty.call(source, 'picture_in_picture_mode')
+    && !['native', 'custom'].includes(source.picture_in_picture_mode)) throw new Error('不支持的画中画小窗模式');
   const merged = { ...current };
   for (const key of SETTINGS_KEYS) {
     if (key === 'proxy_password') continue;
@@ -4910,6 +4914,11 @@ function createWindow() {
   mainWindow.webContents.on('zoom-changed', (_event, direction) => changeMainWindowZoom(direction));
   syncMainWindowScale();
   rendererSecurity.protectWindow(mainWindow);
+  attachFloatingPlayerWindow(mainWindow, {
+    BrowserWindow,
+    isTrustedUrl: rendererSecurity.isTrustedUrl,
+    store,
+  });
   episodePanel.attach(mainWindow);
   mainWindow.webContents.once('did-finish-load', () => {
     if (storageError) sendToRenderer('storage-error', storageError);

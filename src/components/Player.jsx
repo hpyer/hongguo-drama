@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import useFloatingPlayer from './useFloatingPlayer';
 import useDialogKeyboard from './useDialogKeyboard';
 import PlayerControls from './PlayerControls';
 import CommentDanmaku, { useCommentDanmaku } from './CommentDanmaku';
@@ -27,7 +29,7 @@ const prefetchKey = (seriesId, vid, quality) => JSON.stringify([String(seriesId 
  *  - 「边下边看」：下一集若还在下载，显示等待态并轮询，下完自动接上
  *  - 断点续播：按 series_id 记住看到第几集、第几秒
  */
-function Player({ target, onNavigate, onSeriesSelected, active = true, portrait = false, actionsHidden = false, episodesOpen = false, setEpisodesOpen }) {
+function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active = true, portrait = false, actionsHidden = false, episodesOpen = false, setEpisodesOpen }) {
   const enhancement = useVideoEnhancement();
   const [shortcuts, setShortcuts] = useState(readShortcuts);
   const [showDanmakuControls, setShowDanmakuControls] = useState(false);
@@ -53,6 +55,12 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const [detail, setDetail] = useState(null); // { series_title, episodes: [...], total, completedCount }
   const [detailError, setDetailError] = useState('');
   const [currentIndex, setCurrentIndex] = useState(1);
+  const [nativePictureInPicture, setNativePictureInPicture] = useState(false);
+  const floatingPlayer = useFloatingPlayer(`${detail?.series_title || '红果短剧'} · 第 ${currentIndex} 集`, onFloatingChange, snapshot => {
+    pendingSeekRef.current = snapshot.currentTime;
+    pendingAutoplayRef.current = !snapshot.paused;
+  });
+  const playbackActive = active || floatingPlayer.floating || nativePictureInPicture;
   const [autoNext, setAutoNext] = useState(true);
   const [autoAdvancing, setAutoAdvancing] = useState(false);
   const [cacheNext, setCacheNext] = useState(true);
@@ -110,8 +118,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const mergeDialogGenerationRef = useRef(0);
   const pendingSeekRef = useRef(0); // 切集后要跳转的秒数
   const pendingAutoplayRef = useRef(false);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useRef(playbackActive);
+  activeRef.current = playbackActive;
   const navigationVersion = useRef(0);
   const storageDirtyRef = useRef(true);
   const lastActiveRef = useRef(active);
@@ -506,7 +514,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
 
   // 事件合并后才核对文件；等待下载本身不触发磁盘扫描。
   useEffect(() => {
-    if (!activeSeriesId || !active) return;
+    if (!activeSeriesId || !playbackActive) return;
     let busy = false, dirty = true;
     const unsubscribe = ['onDownloadTaskAdded', 'onDownloadCompleted', 'onDownloadFailed', 'onDownloadStopped', 'onDownloadQueueChanged', 'onWatchHistoryUpdated']
       .map(name => window.electronAPI[name]?.(() => { dirty = true; }));
@@ -549,7 +557,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     }, 2000);
     return () => { clearInterval(timer); unsubscribe.forEach(off => off?.()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, activeSeriesId, waitingFor, loadDetail, currentPosition, isCurrentFallback, usableLocal, resumeLocal]);
+  }, [playbackActive, activeSeriesId, waitingFor, loadDetail, currentPosition, isCurrentFallback, usableLocal, resumeLocal]);
 
   const episodes = detail ? detail.episodes : [];
   const current = useMemo(
@@ -565,7 +573,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   if (canPlay) lastVideoSrcRef.current = playableSource;
   const videoSrc = !playbackRequested || compatProgress ? '' : lastVideoSrcRef.current;
   const danmakuSource = useDanmakuSource();
-  const danmakuActive = active && canPlay && showDanmakuControls;
+  const visualActive = canPlay && (active || floatingPlayer.floating);
+  const danmakuActive = visualActive && showDanmakuControls;
   const commentDanmaku = useCommentDanmaku({ seriesId: activeSeriesId, episodeId: current?.vid, active: danmakuActive && danmakuSource === 'comments' });
   const officialDanmaku = useOfficialDanmaku({ seriesId: activeSeriesId, vid: current?.vid, active: danmakuActive && danmakuSource === 'official', preferences: commentDanmaku });
   const danmaku = { ...(danmakuSource === 'official' ? officialDanmaku : commentDanmaku), sourceKind: danmakuSource, setSource: writeDanmakuSource };
@@ -976,7 +985,24 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   }, [persistPosition]);
 
   useEffect(() => {
-    if (active) return;
+    const video = videoRef.current;
+    const sync = () => {
+      const native = !!video && document.pictureInPictureElement === video;
+      setNativePictureInPicture(native);
+      onFloatingChange?.(native || floatingPlayer.floating);
+    };
+    sync();
+    if (!video) return;
+    video.addEventListener('enterpictureinpicture', sync);
+    video.addEventListener('leavepictureinpicture', sync);
+    return () => {
+      video.removeEventListener('enterpictureinpicture', sync);
+      video.removeEventListener('leavepictureinpicture', sync);
+    };
+  }, [loading, videoSrc, floatingPlayer.floating, onFloatingChange]);
+
+  useEffect(() => {
+    if (playbackActive) return;
     navigationVersion.current++;
     persistPosition(true);
     pendingAutoplayRef.current = false;
@@ -985,11 +1011,8 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
     setWaitingFor(null);
     setAutoAdvancing(false);
     const video = videoRef.current;
-    if (video && document.pictureInPictureElement === video) {
-      document.exitPictureInPicture?.()?.catch?.(() => {});
-    }
     video?.pause();
-  }, [active, persistPosition]);
+  }, [playbackActive, persistPosition]);
 
   const handleMetadata = (event) => {
     const v = event.currentTarget;
@@ -1027,8 +1050,9 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
   const toggleFullscreen = useCallback(async () => {
     if (document.querySelector('.stealth-mode')) { showToast('请先退出小窗模式'); return; }
     try {
-      if (portrait) { setWindowFill(fill => !fill); return; }
-      if (document.fullscreenElement === stageRef.current) await document.exitFullscreen();
+      const stageDocument = stageRef.current?.ownerDocument || document;
+      if (portrait && !floatingPlayer.floating) { setWindowFill(fill => !fill); return; }
+      if (stageDocument.fullscreenElement === stageRef.current) await stageDocument.exitFullscreen();
       else {
         const element = stageRef.current?.closest('.main-content');
         // Fullscreen takes the player out of flow and can clamp the page's scrollTop to zero.
@@ -1036,11 +1060,12 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
         await stageRef.current?.requestFullscreen();
       }
     } catch { restoreFullscreenScroll(); showToast('无法进入或退出全屏，请重试'); }
-  }, [portrait, showToast, restoreFullscreenScroll]);
+  }, [portrait, floatingPlayer.floating, showToast, restoreFullscreenScroll]);
 
   // Capture handled keys before media controls; cancel keyup too so focused buttons cannot toggle twice.
   useEffect(() => {
-    if (!active || confirmAsk || mergeAsk || pickerOpen) return;
+    if ((!active && !floatingPlayer.floating) || confirmAsk || mergeAsk || pickerOpen) return;
+    const keyboardWindow = stageRef.current?.ownerDocument?.defaultView || window;
     const held = new Set();
     const onKey = (event) => {
       const video = videoRef.current;
@@ -1072,15 +1097,15 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
       event.preventDefault(); event.stopPropagation?.();
     };
     const onBlur = () => held.clear();
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('keyup', onKeyUp, true);
-    window.addEventListener('blur', onBlur);
+    keyboardWindow.addEventListener('keydown', onKey, true);
+    keyboardWindow.addEventListener('keyup', onKeyUp, true);
+    keyboardWindow.addEventListener('blur', onBlur);
     return () => {
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('keyup', onKeyUp, true);
-      window.removeEventListener('blur', onBlur);
+      keyboardWindow.removeEventListener('keydown', onKey, true);
+      keyboardWindow.removeEventListener('keyup', onKeyUp, true);
+      keyboardWindow.removeEventListener('blur', onBlur);
     };
-  }, [active, confirmAsk, mergeAsk, pickerOpen, findNext, findPrev, goToEpisode, changePlaybackRate, showToast, shortcuts, toggleFullscreen]);
+  }, [active, floatingPlayer.floating, confirmAsk, mergeAsk, pickerOpen, findNext, findPrev, goToEpisode, changePlaybackRate, showToast, shortcuts, toggleFullscreen]);
 
   const switchSeries = useCallback(async (sid, requestedIndex = 0, resume = false, autoplay = true) => {
     persistPosition(true);
@@ -1560,6 +1585,13 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
 
       <div className="player-viewing-layout">
       {/* 播放区 */}
+      <div className="player-floating-slot" ref={floatingPlayer.attachSlot}>
+        {floatingPlayer.floating && <div className="player-floating-placeholder" role="status">
+          <p>正在悬浮窗播放《{detail?.series_title}》</p>
+          <button className="btn btn-outline" onClick={floatingPlayer.toggle}>返回主窗口</button>
+        </div>}
+      </div>
+      {createPortal(
       <div className={`player-stage ${windowFill ? 'player-window-fill' : ''}`} data-picture-mode={pictureMode} ref={stageRef}>
           {rateNotice !== null && <div className="player-rate-notice" role="status" aria-live="polite">{rateNotice}×</div>}
           <video
@@ -1621,11 +1653,25 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
               if (failedDecode && !unavailableOnline) tryAutoCompat(currentIndex);
             }}
           />
-        <VideoEnhancement videoRef={videoRef} source={videoSrc} available={canPlay && active} enhancement={enhancement} />
+        <VideoEnhancement videoRef={videoRef} source={videoSrc} available={visualActive} enhancement={enhancement} />
         {danmakuSource === 'official'
-          ? <OfficialDanmaku videoRef={videoRef} source={videoSrc} available={canPlay && active} danmaku={danmaku} />
-          : <CommentDanmaku videoRef={videoRef} source={videoSrc} available={canPlay && active} danmaku={danmaku} />}
-        <PlayerControls onOpenSettings={onNavigate ? () => onNavigate('settings') : undefined} danmaku={showDanmakuControls ? danmaku : null} enhancement={enhancement} continuing={autoAdvancing && !playbackError && !decodeFailed} autoContinue={autoNext && !!findNext(currentIndex)} shortcuts={shortcuts} onToggleFullscreen={toggleFullscreen} portrait={portrait} windowFill={windowFill} onWindowFill={setWindowFill} videoRef={videoRef} stageRef={stageRef} source={videoSrc} available={canPlay}
+          ? <OfficialDanmaku videoRef={videoRef} source={videoSrc} available={visualActive} danmaku={danmaku} />
+          : <CommentDanmaku videoRef={videoRef} source={videoSrc} available={visualActive} danmaku={danmaku} />}
+      <PlayerControls floating={floatingPlayer.floating || nativePictureInPicture} onToggleFloating={async () => {
+          if (document.querySelector('.stealth-mode')) throw new Error('请先退出小窗模式');
+          const video = videoRef.current;
+          if (floatingPlayer.floating) { floatingPlayer.toggle(); return; }
+          if (document.pictureInPictureElement === video) { await document.exitPictureInPicture(); return; }
+          const settings = await window.electronAPI.getSettings();
+          if (settings?.picture_in_picture_mode === 'native') {
+            if (!document.pictureInPictureEnabled || !video?.requestPictureInPicture) throw new Error('当前系统不支持原生画中画');
+            await video.requestPictureInPicture();
+            return;
+          }
+          const owner = stageRef.current?.ownerDocument || document;
+          if (owner.fullscreenElement) await owner.exitFullscreen();
+          floatingPlayer.toggle();
+        }} onOpenSettings={onNavigate ? () => onNavigate('settings') : undefined} danmaku={showDanmakuControls ? danmaku : null} enhancement={enhancement} continuing={autoAdvancing && !playbackError && !decodeFailed} autoContinue={autoNext && !!findNext(currentIndex)} shortcuts={shortcuts} onToggleFullscreen={toggleFullscreen} portrait={portrait} windowFill={windowFill} onWindowFill={setWindowFill} videoRef={videoRef} stageRef={stageRef} source={videoSrc} available={canPlay}
           seriesTitle={detail?.series_title} episodes={episodes} currentIndex={currentIndex} onEpisodeChange={goToEpisode}
           onlineQuality={onlineQuality} supportsOnlineQuality={supportsOnlineQuality} onQualityChange={changeOnlineQuality}
           pictureMode={pictureMode} onPictureModeChange={changePictureMode} rate={playbackRate} onRateChange={changePlaybackRate} onError={showToast} />
@@ -1750,7 +1796,7 @@ function Player({ target, onNavigate, onSeriesSelected, active = true, portrait 
             </div>
           </div>
         )}
-      </div>
+      </div>, floatingPlayer.host)}
 
       <section className="player-episode-panel" id="player-episode-panel" aria-label="选集">
       <h3 className="portrait-episode-heading">选集</h3>

@@ -150,7 +150,7 @@ export default function AccountManagement({ active = true }) {
   return <div className="account-page">
     <div className="account-page-header">
       <User size={22} />
-      <div><h2>登录管理</h2><p>网页扫码登录红果账号，读取 APP 观看记录。</p></div>
+      <div><h2>红果账号</h2><p>网页扫码登录红果账号，读取 APP 观看记录。</p></div>
     </div>
     <section className="account-card" aria-label="红果账号状态">
       {account ? <>

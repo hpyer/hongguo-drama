@@ -28,7 +28,7 @@ class Window extends EventEmitter {
   loadFile() {}
 }
 const electron = { app, BrowserWindow: Window, screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) }, ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, protocol: { registerSchemesAsPrivileged() {} }, shell: { openExternal: async url => { opened.push(url); } } };
-const context = vm.createContext({ require: name => name === 'electron' ? electron : name === './src/store' ? { setErrorHandler() {}, getSettings: () => ({}) } : req(name), __dirname: path.dirname(file), process, Buffer, URL, AbortController, setTimeout, clearTimeout, console: { log() {}, warn() {}, error() {} } });
+const context = vm.createContext({ require: name => name === 'electron' ? electron : name === './src/store' ? { setErrorHandler() {}, getSettings: () => ({}), saveSettings() {} } : req(name), __dirname: path.dirname(file), process, Buffer, URL, AbortController, setTimeout, clearTimeout, console: { log() {}, warn() {}, error() {} } });
 vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
 context.createWindow();
 const win = vm.runInContext('mainWindow', context);

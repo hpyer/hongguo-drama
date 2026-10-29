@@ -19,13 +19,15 @@ function mount({ local = false, localIndexes = [], saved = null, transcode, prep
   const events = new Map(), mediaEvents = new Map(), timers = new Map();
   const listenerOptions = new Map(), mediaCalls = { play: 0, pause: 0 };
   const documentEvents = new Map();
-  let pipExits = 0;
+  let pipExits = 0, floating = false;
+  const floatingEvents = new Map();
+  const floatingWindow = { addEventListener: (name, fn) => floatingEvents.set(name, fn), removeEventListener: name => floatingEvents.delete(name) };
   const document = { activeElement: null, querySelector: () => null, fullscreenElement: null, pictureInPictureElement: null,
-    pictureInPictureEnabled: true, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; },
+    pictureInPictureEnabled: true, exitPictureInPicture: async () => { pipExits++; floating = false; stage.ownerDocument = document; document.pictureInPictureElement = null; mediaEvents.get('leavepictureinpicture')?.(); render(); },
     addEventListener: (name, fn) => documentEvents.set(name, fn), removeEventListener: name => documentEvents.delete(name),
     exitFullscreen: async () => { document.fullscreenElement = null; documentEvents.get('fullscreenchange')?.(); } };
   const scrollArea = { scrollTop: 360 };
-  const stage = { closest: selector => selector === '.main-content' ? scrollArea : null,
+  const stage = { ownerDocument: document, closest: selector => selector === '.main-content' ? scrollArea : null,
     requestFullscreen: async () => { document.fullscreenElement = stage; scrollArea.scrollTop = 0; documentEvents.get('fullscreenchange')?.(); } };
   let cursor = 0, tree, timerId = 0, oldSrc = '', oldKey;
   let transcodeProgress;
@@ -79,10 +81,12 @@ function mount({ local = false, localIndexes = [], saved = null, transcode, prep
     addEventListener: (k, f, options) => { events.set(k, f); listenerOptions.set(k, options); },
     removeEventListener: k => { events.delete(k); listenerOptions.delete(k); },
     dispatchEvent: event => { events.get(event.type)?.(event); return !event.defaultPrevented; } };
+  document.defaultView = window;
+  const popupDocument = { ...document, defaultView: floatingWindow };
   const shortcutModule = { exports: {} };
   vm.runInNewContext(shortcutSource, { module: shortcutModule, exports: shortcutModule.exports, window, Event });
   const setTimer = (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; };
-  const context = { module: { exports: {} }, Date: class extends Date { static now() { return now(); } }, require: n => n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences }) => preferences } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), requestAnimationFrame: fn => setTimer(fn, 0), cancelAnimationFrame: id => timers.delete(id), console };
+  const context = { module: { exports: {} }, Date: class extends Date { static now() { return now(); } }, require: n => n === 'react-dom' ? { createPortal: children => children } : n === './useFloatingPlayer' ? { __esModule: true, default: () => ({ host: {}, attachSlot() {}, floating, toggle() { floating = !floating; stage.ownerDocument = floating ? popupDocument : document; render(); } }) } : n === 'react' ? react : n === './useDialogKeyboard' ? () => {} : n === '../shortcuts' ? shortcutModule.exports : n === './VideoEnhancement' ? videoEnhancementStub : n === './danmakuSource.mjs' ? { useDanmakuSource: () => 'official', writeDanmakuSource() {} } : n === './OfficialDanmaku' ? { useOfficialDanmaku: ({ preferences, active }) => ({ ...preferences, active }) } : n === './CommentDanmaku' ? { useCommentDanmaku: () => ({ enabled: false, settings: {}, comments: [] }) } : {}, window, document, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: setTimer, clearTimeout: id => timers.delete(id), setInterval: setTimer, clearInterval: id => timers.delete(id), requestAnimationFrame: fn => setTimer(fn, 0), cancelAnimationFrame: id => timers.delete(id), console };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
   const nodes = () => { const out = []; const walk = n => { if (!n || typeof n !== 'object') return; out.push(n); n.children?.forEach(walk); }; walk(tree); return out; };
@@ -114,13 +118,15 @@ function mount({ local = false, localIndexes = [], saved = null, transcode, prep
   };
   render();
   return { props, render, flush, find, media, metadata, saves, prepares, transcodes, cancelled, events, timers, listenerOptions, mediaCalls, document, dispatchKey,
-    releases, settingsSaved, stage, scrollArea,
+    releases, settingsSaved, stage, scrollArea, mediaEvents,
     text: () => text(tree),
     historyUpdated: payload => [...historyListeners].forEach(listener => listener(payload)),
     flushBatched: async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); render(); },
     transcodeProgress: payload => transcodeProgress?.(payload),
     button: label => find(n => n.type === 'button' && text(n).includes(label)),
-    enterPictureInPicture: () => { document.pictureInPictureElement = media; },
+    enterFloatingPlayer: () => { floating = true; stage.ownerDocument = popupDocument; document.pictureInPictureElement = media; render(); },
+    exitFloatingPlayer: () => document.exitPictureInPicture(),
+    isFloating: () => floating,
     pictureInPictureExits: () => pipExits,
     episode: n => find(x => x.props['aria-label'] === `第 ${n} 集`).props.onClick(),
     error: code => find(n => n.type === 'video').props.onError({ currentTarget: Object.assign(media, { error: { code } }) }),
@@ -380,16 +386,6 @@ if (require.main === module) (async () => {
     finishNext({ success: true, url: 'hongguo-stream://two' }); await ui.flush();
     assert.equal(ui.find(n => n.type === 'video').props.key, first.props.key);
     assert.equal(ui.find(n => n.type === 'video').props.src, 'hongguo-stream://two'); ui.unmount();
-  });
-  await test('leaving the player page exits native picture-in-picture before pausing', async () => {
-    const ui = mount({ props: { active: true, target: { seriesId: 'A', vidIndex: 1, ts: 1 } } });
-    await ui.flush(); ui.metadata();
-    ui.enterPictureInPicture();
-    ui.props.active = false;
-    ui.render(); await ui.flush();
-    assert.equal(ui.pictureInPictureExits(), 1, 'leaving the player page must close the native PiP window');
-    assert.equal(ui.media.paused, true, 'the retained player must still pause after leaving');
-    ui.unmount();
   });
   await test('merge quality mode preserves the dialog on 1080P rejection and supports fallback modes', async () => {
     let resolveHigh;

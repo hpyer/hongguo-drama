@@ -11,10 +11,10 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, 'playback-device.js'), 'utf8');
 const endpoint = 'https://log5-applog-lf.fqnovel.com/service/2/device_register/?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1';
 const failureMessage = '匿名播放设备注册失败，请重启应用后重试';
-function load() {
+function load(clock = Date) {
     const module = { exports: {} };
     vm.runInNewContext(source, {
-        module, Buffer, AbortSignal,
+        module, Buffer, AbortSignal, Date: clock,
         require(name) {
             assert.ok(['node:crypto', 'node:zlib'].includes(name), 'no transport or persistence dependencies');
             return require(name);
@@ -53,6 +53,36 @@ test('lazy registration shares one promise and one exact identity across concurr
     assert.ok(Object.isFrozen(identity));
     assert.ok((await Promise.all(pending)).every(item => item === identity));
     assert.equal(get(() => assert.fail('must not register again')), first);
+    assert.equal(calls, 1);
+});
+
+test('empty playback can renew a rejected identity once and concurrent failures share the replacement', async () => {
+    let now = Date.now(), calls = 0;
+    const get = load({ now: () => now });
+    const request = async () => ({ device_id: String(++calls), install_id: String(calls + 100) });
+    const rejected = await get(request);
+    const renewed = await Promise.all(Array.from({ length: 20 }, () => get(request, rejected)));
+    assert.equal(calls, 2, 'one initial registration plus one shared renewal');
+    assert.ok(renewed.every(identity => identity === renewed[0]));
+    assert.notEqual(renewed[0], rejected);
+    assert.equal(await get(request, rejected), renewed[0], 'late rejection cannot replace a newer identity');
+    assert.equal(await get(request, renewed[0]), renewed[0], 'persistent empty responses cannot churn devices');
+    now += 60001;
+    assert.notEqual(await get(request, renewed[0]), renewed[0], 'later transient failures can recover after cooldown');
+    assert.equal(calls, 3);
+});
+
+test('failed renewal stays shared and retains the previous device for other callers', async () => {
+    const get = load();
+    const rejected = await get(async () => ({ device_id: '123', install_id: '456' }));
+    let calls = 0;
+    const fail = async () => { calls++; throw new Error('PRIVATE_RESPONSE_SENTINEL'); };
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => get(fail, rejected)));
+    assert.equal(calls, 1);
+    assert.ok(results.every(result => result.status === 'rejected' && result.reason.code === 'DEVICE_REGISTRATION_FAILED'));
+    assert.doesNotMatch(JSON.stringify(results), /PRIVATE_RESPONSE_SENTINEL/);
+    assert.equal(await get(fail), rejected, 'a failed refresh must not poison search or account identity reads');
+    assert.equal(await get(fail, rejected), rejected, 'cooldown also bounds failed registration attempts');
     assert.equal(calls, 1);
 });
 

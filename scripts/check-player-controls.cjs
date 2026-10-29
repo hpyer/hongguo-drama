@@ -14,7 +14,7 @@ vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../src/pl
 const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/components/PlayerControls.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 
 (async () => {
-  const slots = [], effects = [], cleanups = [], listeners = new Map(), documentListeners = new Map(), stageListeners = new Map(), windowListeners = new Map(), timers = new Map();
+  const slots = [], effects = [], cleanups = [], listeners = new Map(), documentListeners = new Map(), stageListeners = new Map(), windowListeners = new Map(), popupDocumentListeners = new Map(), popupWindowListeners = new Map(), timers = new Map();
   let nextTimer = 0, keyboardFocus = false, now = 0, blurs = 0;
   class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const advance = (milliseconds = 1000) => {
@@ -27,7 +27,7 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     now = until;
   };
   let needsRender = false;
-  let cursor = 0, tree, plays = 0, pauses = 0, fullscreenCalls = 0, selectedRate, pipRequests = 0, pipExits = 0, pipError = '';
+  let cursor = 0, tree, plays = 0, pauses = 0, fullscreenCalls = 0, selectedRate, floatingCalls = 0, floatingError = '', activeStageDocument = null;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
     useState: initial => { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { const next = typeof value === 'function' ? value(slots[i]) : value; if (!Object.is(slots[i], next)) needsRender = true; slots[i] = next; }]; },
@@ -35,13 +35,20 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     useEffect: (fn, deps) => { const i = cursor++; if (!slots[i] || deps.some((v, j) => v !== slots[i][j])) { slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = fn(); }); } },
   };
   const media = { paused: true, ended: false, currentTime: 12, duration: 100, muted: false, volume: 0.7,
-    requestPictureInPicture: async () => { pipRequests++; document.pictureInPictureElement = media; listeners.get('enterpictureinpicture')?.(); },
     play: async () => { plays++; media.paused = false; listeners.get('play')?.(); },
     pause: () => { pauses++; media.paused = true; listeners.get('pause')?.(); },
     addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const document = { activeElement: null, fullscreenElement: null, pictureInPictureElement: null, pictureInPictureEnabled: true, stealthMode: false, querySelector: selector => selector === '.stealth-mode' && document.stealthMode ? {} : null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); }, exitPictureInPicture: async () => { pipExits++; document.pictureInPictureElement = null; listeners.get('leavepictureinpicture')?.(); } };
-  const stage = { addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
-  const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, rate: 1, onRateChange: rate => { selectedRate = rate; }, onError: message => { pipError = message; } };
+  const document = { activeElement: null, fullscreenElement: null, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: (name, fn) => { if (documentListeners.get(name) === fn) documentListeners.delete(name); }, exitFullscreen: async () => { document.fullscreenElement = null; documentListeners.get('fullscreenchange')?.(); } };
+  const popupDocument = { activeElement: null, fullscreenElement: null, addEventListener: (name, fn) => popupDocumentListeners.set(name, fn), removeEventListener: (name, fn) => { if (popupDocumentListeners.get(name) === fn) popupDocumentListeners.delete(name); }, exitFullscreen: async () => { popupDocument.fullscreenElement = null; popupDocumentListeners.get('fullscreenchange')?.(); } };
+  const stage = { get ownerDocument() { return activeStageDocument; }, addEventListener: (name, fn) => stageListeners.set(name, fn), removeEventListener: name => stageListeners.delete(name), requestFullscreen: async () => { fullscreenCalls++; document.fullscreenElement = stage; documentListeners.get('fullscreenchange')?.(); } };
+  const popupWindow = { addEventListener: (name, fn) => popupWindowListeners.set(name, fn), removeEventListener: (name, fn) => { if (popupWindowListeners.get(name) === fn) popupWindowListeners.delete(name); } };
+  popupDocument.defaultView = popupWindow;
+  const props = { videoRef: { current: media }, stageRef: { current: stage }, source: 'one', available: true, floating: false, rate: 1, onRateChange: rate => { selectedRate = rate; }, onError: message => { floatingError = message; } };
+  props.onToggleFloating = async () => {
+    floatingCalls++;
+    props.floating = !props.floating;
+    activeStageDocument = props.floating ? popupDocument : null;
+  };
   props.onWindowFill = value => { props.windowFill = value; };
   props.onToggleFullscreen = async () => {
     if (props.portrait) props.onWindowFill(!props.windowFill);
@@ -63,28 +70,31 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
   await find('播放').props.onClick(); render(); assert.equal(plays, 1); assert.ok(find('暂停'));
   find('暂停').props.onClick(); render(); assert.equal(pauses, 1);
   assert.equal(find('画中画').props['aria-pressed'], false);
+  assert.match(find('画中画').props.title, /系统原生或应用自带/);
   await find('画中画').props.onClick(); render();
-  assert.equal(pipRequests, 1, 'picture-in-picture control must request a native floating window');
+  assert.equal(floatingCalls, 1, 'floating control must delegate to its owner');
   assert.equal(find('退出画中画').props['aria-pressed'], true);
+  assert.equal(find('退出画中画').props.title, '返回主窗口');
+  assert.equal(windowListeners.has('keydown'), false, 'floating player releases main-window keyboard listeners');
+  assert.ok(popupWindowListeners.has('keydown'), 'floating player listens for keyboard input in its own window');
+  assert.equal(documentListeners.has('fullscreenchange'), false, 'floating player leaves main-document fullscreen events');
+  assert.ok(popupDocumentListeners.has('fullscreenchange'), 'floating player follows fullscreen events in its own document');
   props.source = 'one-source-change'; render();
-  assert.equal(pipExits, 0, 'source changes and auto-next must keep the native picture-in-picture window open');
+  assert.equal(floatingCalls, 1, 'source changes and auto-next must not close the custom floating window');
   assert.equal(find('退出画中画').props['aria-pressed'], true);
   await find('退出画中画').props.onClick(); render();
-  assert.equal(pipExits, 1, 'picture-in-picture control must close the native floating window');
+  assert.equal(floatingCalls, 2, 'floating control must request returning to the main window');
   assert.equal(find('画中画').props['aria-pressed'], false);
-  document.stealthMode = true;
+  assert.equal(find('画中画').props.title, '画中画：在设置中选择系统原生或应用自带小窗');
+  assert.ok(windowListeners.has('keydown'), 'returning to the main window restores its keyboard listeners');
+  assert.equal(popupWindowListeners.has('keydown'), false, 'returning to the main window releases floating-window listeners');
+  assert.ok(documentListeners.has('fullscreenchange'), 'returning to the main window restores main-document fullscreen events');
+  assert.equal(popupDocumentListeners.has('fullscreenchange'), false, 'returning to the main window releases floating-document fullscreen events');
+  props.onToggleFloating = async () => { throw new Error('悬浮窗打开失败'); };
+  render();
   await find('画中画').props.onClick(); render();
-  assert.match(pipError, /请先退出小窗模式/);
-  document.stealthMode = false;
-  const requestPictureInPicture = media.requestPictureInPicture;
-  document.pictureInPictureEnabled = false;
-  await find('画中画').props.onClick(); render();
-  assert.match(pipError, /不支持画中画/);
-  document.pictureInPictureEnabled = true;
-  media.requestPictureInPicture = async () => { const error = new Error('gesture required'); error.name = 'NotAllowedError'; throw error; };
-  await find('画中画').props.onClick(); render();
-  assert.match(pipError, /开始播放/);
-  media.requestPictureInPicture = requestPictureInPicture;
+  assert.equal(floatingError, '悬浮窗打开失败', 'floating callback errors reach onError');
+  props.onToggleFloating = async () => { props.floating = !props.floating; };
   find('播放进度').props.onChange({ target: { value: '37.5' } }); assert.equal(media.currentTime, 37.5);
   find('静音').props.onClick(); listeners.get('volumechange')?.(); render(); assert.equal(media.muted, true); assert.ok(find('取消静音'));
   find('音量').props.onChange({ target: { value: '0.4' } }); assert.equal(media.volume, 0.4); assert.equal(media.muted, false);
@@ -386,7 +396,8 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
 
   media.duration = NaN; listeners.get('durationchange')(); render(); assert.equal(find('播放进度').props.disabled, true);
   props.available = false; render(); assert.equal(find('播放').props.disabled, true);
-  cleanups.forEach(fn => fn?.()); assert.equal(listeners.size, 0); assert.equal(documentListeners.size, 0); assert.equal(stageListeners.size, 0); assert.equal(windowListeners.size, 0); assert.equal(timers.size, 0);
+  assert.equal(find('画中画').props.disabled, true);
+  cleanups.forEach(fn => fn?.()); assert.equal(listeners.size, 0); assert.equal(documentListeners.size, 0); assert.equal(stageListeners.size, 0); assert.equal(windowListeners.size, 0); assert.equal(popupDocumentListeners.size, 0); assert.equal(popupWindowListeners.size, 0); assert.equal(timers.size, 0);
   const { mount } = require('./check-player-resume.cjs');
   const controls = ui => ui.find(node => node.props.onRateChange && node.props.videoRef);
   const qualityUi = mount({ local: true, settings: { cache_next_episode: false } });
@@ -477,5 +488,5 @@ const source = transformSync(fs.readFileSync(path.join(__dirname, '../src/compon
     assert.equal(controls(blocked).props.continuing, false, 'autoplay rejection must leave the play control accessible');
     blocked.unmount();
   }
-  console.log('PASS video controls: one-second pointer idle and quiet held-key boundaries; previous-to-auto-next continuity with stationary-pointer/video-focus/early-pause events; real movement/click/Tab/focused-control/manual-pause access; persistent-pause recovery; default/custom previous/next keydown/keyup/reset/preparation/source/metadata/playing, local/online shortcut matrix, input/menu boundaries, play/pause, seek, volume, lower-right 4× menu, picture-in-picture request/exit/error, fullscreen idle/reveal, auto-next pause/preparing/source/metadata/play continuity, local/online parent wiring, failure/end recovery, pause/menu/drag/focus guards, portrait and exit cleanup');
+  console.log('PASS video controls: controlled custom floating-window toggle, source continuity, callback errors, cross-document listener rebinding; one-second pointer idle and quiet held-key boundaries; previous-to-auto-next continuity with stationary-pointer/video-focus/early-pause events; real movement/click/Tab/focused-control/manual-pause access; persistent-pause recovery; default/custom previous/next keydown/keyup/reset/preparation/source/metadata/playing, local/online shortcut matrix, input/menu boundaries, play/pause, seek, volume, lower-right 4× menu, fullscreen idle/reveal, auto-next pause/preparing/source/metadata/play continuity, local/online parent wiring, failure/end recovery, pause/menu/drag/focus guards, portrait and exit cleanup');
 })().catch(error => { console.error(error); process.exitCode = 1; });

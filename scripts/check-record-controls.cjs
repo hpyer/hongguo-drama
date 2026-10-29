@@ -79,10 +79,10 @@ test('search x deletes a term without selecting it or starting a search', async 
 });
 
 test('watch row removal calls only the removal API and retains row on error', async () => {
-  const h = fixture(); let fail = true, calls = 0;
+  const h = fixture(); let fail = true, calls = 0, removed = false;
   h.window.electronAPI = {
-    getWatchHistory: async () => ({ success: true, results: [{ series_id: 'a', series_title: '甲', vid_index: 1, total: 2, updatedAt: Date.now() }] }),
-    removeWatchHistory: async id => { assert.equal(id, 'a'); calls++; return fail ? { success: false, error: 'fixture failure' } : { success: true }; },
+    getWatchHistory: async () => ({ success: true, results: removed ? [] : [{ series_id: 'a', series_title: '甲', vid_index: 1, total: 2, updatedAt: Date.now() }] }),
+    removeWatchHistory: async id => { assert.equal(id, 'a'); calls++; if (!fail) removed = true; return fail ? { success: false, error: 'fixture failure' } : { success: true }; },
   };
   const ui = h.mount('components/WatchHistory.jsx'); await ui.flush();
   const remove = () => ui.find(n => n.props['aria-label'] === '移除观看记录《甲》');

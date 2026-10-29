@@ -12,13 +12,15 @@ export default function WatchHistory({ active = true, onNavigate }) {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [filter, setFilter] = useState('all');
+  const [hideLowSeasons, setHideLowSeasons] = useState(false);
   const [scope, setScope] = useState('all');
   const [progress, setProgress] = useState(null);
   const request = useRef(0);
   const openingRef = useRef(false);
   const openingRequest = useRef(0);
-  const completedCount = rows.filter(row => row.completed === true).length;
-  const visibleRows = rows.filter(row => filter === 'all' || (row.completed === true) === (filter === 'completed'));
+  const listedRows = hideLowSeasons ? rows.filter(row => !row.hasHigherSeason) : rows;
+  const completedCount = listedRows.filter(row => row.completed === true).length;
+  const visibleRows = listedRows.filter(row => filter === 'all' || (row.completed === true) === (filter === 'completed'));
 
   const load = async () => {
     const version = ++request.current;
@@ -77,9 +79,9 @@ export default function WatchHistory({ active = true, onNavigate }) {
     try {
       const result = await window.electronAPI.removeWatchHistory(row.series_id);
       if (!result?.success) throw new Error(result?.error || '移除失败，请重试');
-      request.current++;
       setRows(current => current.filter(item => item.series_id !== row.series_id));
       setStatus(`已移除《${row.series_title}》的观看记录，视频文件不受影响。`);
+      void load();
     } catch (failure) { setError(failure.message || '移除失败，请重试'); }
     finally { setRemoving(''); }
   };
@@ -113,6 +115,10 @@ export default function WatchHistory({ active = true, onNavigate }) {
     finally { if (version === openingRequest.current) { setOpening(''); openingRef.current = false; } }
   };
 
+  const emptyTitle = hideLowSeasons
+    ? filter === 'completed' ? '最高季里没有已看完的短剧' : '最高季里没有未看完的短剧'
+    : filter === 'completed' ? '还没有已看完的短剧' : '没有未看完的短剧';
+
   return <section className="history-container" aria-labelledby="history-title">
     <div className="history-header">
       <div><h1 id="history-title">观看记录</h1><p>继续上次的故事。记录仅保存在这台电脑。</p></div>
@@ -129,14 +135,20 @@ export default function WatchHistory({ active = true, onNavigate }) {
       </div>
     </div>
     <p className="history-hint">运行期间自动检查新集；同一部剧的多个季会共用一次续作搜索，已看完的低季每 24 小时检测一次。不同剧号的新一季标为“疑似续作”。可在设置中关闭检测或开启系统通知。</p>
-    <div className="history-filter" role="group" aria-label="观看进度筛选">
-      {[
-        ['all', '全部', rows.length],
-        ['unfinished', '未看完', rows.length - completedCount],
-        ['completed', '已看完', completedCount],
-      ].map(([value, label, count]) => <button key={value} type="button" aria-pressed={filter === value} disabled={loading} onClick={() => setFilter(value)}>{label} {count}</button>)}
+    <div className="history-filter-bar">
+      <div className="history-filter" role="group" aria-label="观看进度筛选">
+        {[
+          ['all', '全部', listedRows.length],
+          ['unfinished', '未看完', listedRows.length - completedCount],
+          ['completed', '已看完', completedCount],
+        ].map(([value, label, count]) => <button key={value} type="button" aria-pressed={filter === value} disabled={loading} onClick={() => setFilter(value)}>{label} {count}</button>)}
+      </div>
+      <label className="history-display-option" title="只调整当前列表；批量检测范围不变，也不会删除记录">
+        <input type="checkbox" checked={hideLowSeasons} disabled={loading} onChange={event => setHideLowSeasons(event.target.checked)} />
+        <span>隐藏同剧低季</span>
+      </label>
     </div>
-    <p className="history-hint">按当前最后一集的片尾进度判断；旧记录可能显示未看完。</p>
+    <p className="history-hint">按当前最后一集的片尾进度判断；隐藏低季后，计数仅代表列表中的季，旧记录可能显示未看完。</p>
     {error && <div className="history-error" role="alert"><span>{error}</span><button className="btn btn-outline btn-sm" onClick={load}>重新加载</button></div>}
     {status && <p className="history-hint" role="status">{status}</p>}
     {checking && progress?.total > 0 && <p className="history-hint" role="status">
@@ -146,7 +158,7 @@ export default function WatchHistory({ active = true, onNavigate }) {
       <Clock size={30} /><h2>还没有观看记录</h2><p>真正开始播放后，短剧和进度会出现在这里。</p>
       <button className="btn btn-primary" onClick={() => onNavigate?.('browse')}>去发现短剧</button>
     </div> : !visibleRows.length ? <div className="history-empty" role="status">
-      <Clock size={30} /><h2>{filter === 'completed' ? '还没有已看完的短剧' : '没有未看完的短剧'}</h2>
+      <Clock size={30} /><h2>{emptyTitle}</h2>
       <button type="button" className="btn btn-outline" onClick={() => setFilter('all')}>查看全部</button>
     </div> : <ul className="history-list">{visibleRows.map(row => <li className="history-row" key={row.series_id}>
       <div className="history-main">

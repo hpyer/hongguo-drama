@@ -355,8 +355,20 @@ async function fetchAppPlayUrl(vid, options = {}) {
         biz_param: { detail_page_version: 0, device_level: 3, disable_digg_stat: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
         mixed_video_id_map: { '1004': [vid] },
     });
-    const signed = playbackRequest(payload, await getPlaybackDevice(requestJson));
-    const response = await requestJson(signed.url, { method: 'POST', headers: signed.headers, data: signed.body }, deadline, signal);
+    let identity = await getPlaybackDevice(requestJson);
+    let response;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const signed = playbackRequest(payload, identity);
+        try {
+            response = await requestJson(signed.url, { method: 'POST', headers: signed.headers, data: signed.body }, deadline, signal);
+            break;
+        } catch (error) {
+            if (attempt || error.code !== 'EMPTY_RESPONSE' || deadline - Date.now() < 8000) throw error;
+            const renewed = await getPlaybackDevice(requestJson, identity);
+            if (renewed === identity) throw error;
+            identity = renewed;
+        }
+    }
     if (Number(response.Code || response.code || 0) !== 0) throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
     const entry = response.data?.[vid];
     const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;

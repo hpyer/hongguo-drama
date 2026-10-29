@@ -382,6 +382,10 @@
   margin-bottom: 12px;
 }
 
+.player-floating-slot { width: 100%; min-width: 0; }
+.player-floating-host { display: contents; }
+.player-floating-placeholder { display: grid; place-content: center; gap: 12px; min-height: 220px; padding: 24px; border: 1px solid var(--border); border-radius: 12px; text-align: center; color: var(--text-secondary); }
+
 .player-video {
   width: 100%;
   height: 100%;

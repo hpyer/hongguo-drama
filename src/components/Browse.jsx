@@ -65,6 +65,7 @@ function Browse({ onNavigate, active = true }) {
   const [meta, setMeta] = useState({ total: 0, totalPages: 0, genres: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [refreshNotice, setRefreshNotice] = useState('');
   const [unsupported, setUnsupported] = useState(false);
   const [sourceUrl, setSourceUrl] = useState('');
 
@@ -80,9 +81,12 @@ function Browse({ onNavigate, active = true }) {
   const loadingRequest = useRef(0);
   const pageCache = useRef(new Map()).current;
   const refreshFirstPage = useRef(false);
+  const refreshToFirstPage = useRef(false);
   const viewRef = useRef({ source: '', category: '', channel: '', genre: '', page: 0 });
+  const resultsRef = useRef(results);
   const listTimer = useRef(null);
   const toastTimer = useRef(null);
+  resultsRef.current = results;
 
   const invalidateList = useCallback(() => {
     listRequest.current++;
@@ -165,6 +169,7 @@ function Browse({ onNavigate, active = true }) {
       const sameView = viewRef.current.source === source && viewRef.current.category === cat && viewRef.current.channel === channel;
       const sameQuery = sameView && viewRef.current.genre === gen;
       const samePage = viewRef.current.page === pg;
+      const resettingToFirstPage = forceRefresh && refreshToFirstPage.current;
       viewRef.current = { source, category: cat, channel, genre: gen, page: pg };
       // A stale App first page is a useful cold-start preview, but must not replace the
       // page the user is already on when refreshing another page or after an expired back.
@@ -173,6 +178,9 @@ function Browse({ onNavigate, active = true }) {
         ? `https://hongguoduanju.com/${cat.startsWith('hot-') ? 'rank' : 'category'}/${encodeURIComponent(cat)}${gen ? `/${encodeURIComponent(gen)}` : ''}${pg > 1 ? `?page=${pg}` : ''}` : '';
       setUnsupported(false);
       setError('');
+      setRefreshNotice('');
+      const previousResults = forceRefresh && !resettingToFirstPage && sameQuery && samePage && resultsRef.current.length
+        ? resultsRef.current : null;
       // Keep the current grid during a genre/page refresh instead of replacing it with skeletons.
       if (useCached) {
         setResults(cached.results);
@@ -224,6 +232,18 @@ function Browse({ onNavigate, active = true }) {
         setMeta(next.meta);
         setSourceUrl(next.sourceUrl);
         if (next.results.length) {
+          refreshToFirstPage.current = false;
+          if (resettingToFirstPage) {
+            setRefreshNotice(`已重新获取 ${next.results.length} 部短剧，已返回第一页。`);
+          } else if (forceRefresh && previousResults) {
+            const sameOrder = previousResults.length === next.results.length
+              && previousResults.every((item, index) => String(item.series_id) === String(next.results[index]?.series_id));
+            setRefreshNotice(sameOrder
+              ? cat.startsWith('hot-')
+                ? `刷新完成：来源榜单顺序未变化（${next.results.length} 部）。`
+                : `刷新完成：来源返回的短剧及顺序未变化（${next.results.length} 部）。`
+              : `刷新完成：片单已更新（${next.results.length} 部）。`);
+          }
           if (!appCatalog || pg === 1) {
             pageCache.delete(key);
             pageCache.set(key, next);
@@ -257,7 +277,10 @@ function Browse({ onNavigate, active = true }) {
 
   useEffect(() => {
     invalidateList(); closeDetail(); pageCache.clear();
+    refreshFirstPage.current = false;
+    refreshToFirstPage.current = false;
     setGenre(''); setPage(1); setResults([]); setMeta({ total: 0, totalPages: 0, genres: [] });
+    setRefreshNotice('');
     if (!mediaSources.some(item => item.id === source)) { setSource('hongguo'); setCategory('real-drama'); }
   }, [sourceRevision, mediaSources, invalidateList, closeDetail]);
 
@@ -274,18 +297,26 @@ function Browse({ onNavigate, active = true }) {
     if (appCatalog && page > 1) {
       invalidateList();
       refreshFirstPage.current = true;
+      refreshToFirstPage.current = true;
       setPage(1);
-    } else return loadList(category, genre, page, true);
+    } else {
+      return loadList(category, genre, page, true);
+    }
   };
+
+  const retryList = () => meta.cursorExpired
+    ? refreshList()
+    : loadList(category, genre, page, !appCatalog);
 
   const switchCatalogChannel = (next) => {
     if (!['app', 'web'].includes(next) || next === catalogChannel) return;
     invalidateList(); closeDetail();
     refreshFirstPage.current = false;
+    refreshToFirstPage.current = false;
     setCatalogChannel(next);
     setGenre(''); setPage(1); setCompletion('all');
     setResults([]); setMeta({ total: 0, totalPages: 0, genres: [] });
-    setSourceUrl(''); setError(''); setUnsupported(false);
+    setSourceUrl(''); setError(''); setRefreshNotice(''); setUnsupported(false);
     try { localStorage.setItem(CATALOG_CHANNEL_KEY, next); } catch (_) { /* selection still works for this launch */ }
   };
 
@@ -294,6 +325,7 @@ function Browse({ onNavigate, active = true }) {
     invalidateList();
     closeDetail();
     refreshFirstPage.current = false;
+    refreshToFirstPage.current = false;
     setSource(next);
     setCategory('real-drama');
     setGenre('');
@@ -302,12 +334,15 @@ function Browse({ onNavigate, active = true }) {
     setMeta({ total: 0, totalPages: 0, genres: [] });
     setSourceUrl('');
     setError('');
+    setRefreshNotice('');
   };
 
   const switchCategory = (slug) => {
     if (slug === category) return;
     invalidateList();
+    refreshToFirstPage.current = false;
     setError('');
+    setRefreshNotice('');
     setMeta({ total: 0, totalPages: 0, genres: [] });
     setCategory(slug);
     setGenre('');
@@ -318,7 +353,9 @@ function Browse({ onNavigate, active = true }) {
   const switchGenre = (slug) => {
     if (slug === genre) return;
     invalidateList();
+    refreshToFirstPage.current = false;
     setError('');
+    setRefreshNotice('');
     setGenre(slug);
     setPage(1);
     // loadList keeps the previous grid visible until the new genre arrives.
@@ -334,6 +371,7 @@ function Browse({ onNavigate, active = true }) {
     }
     invalidateList();
     setError('');
+    setRefreshNotice('');
     setPage(next);
     document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -481,6 +519,7 @@ function Browse({ onNavigate, active = true }) {
       </div>
 
       {source === 'hongguo' && <p className="browse-source-note">App 与官网的榜单、题材划分可能不同。{appCatalog && '刷新将回到第一页。'}</p>}
+      {refreshNotice && <p className="browse-source-note" role="status">{refreshNotice}</p>}
 
       {/* 分类 tab */}
       {source === 'hongguo' && [false, true].map(ranking => {
@@ -540,9 +579,9 @@ function Browse({ onNavigate, active = true }) {
       {!loading && !error && results.length > 0 && visibleResults.length === 0 && <div className="browse-filter-empty" role="status"><p>本页没有明确标记为{completion === 'completed' ? '已完结' : '更新中'}的剧集。</p><button className="btn btn-outline" onClick={() => setCompletion('all')}>显示本页全部</button></div>}
 
       {error && results.length > 0 && <div className="alert alert-error browse-update-error" role="alert">
-        <span>{error}</span><button className="btn btn-outline btn-sm" disabled={loading || sourcesLoading} onClick={refreshList}>重试</button>
+        <span>{error}</span><button className="btn btn-outline btn-sm" disabled={loading || sourcesLoading} onClick={retryList}>重试</button>
       </div>}
-      {error && results.length === 0 && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={refreshList}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
+      {error && results.length === 0 && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={retryList}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
 
       {loading && results.length > 0 && <div className="browse-loading" role="status"><RefreshCw size={18} className="spin" /><span>正在更新片单，仍可浏览上次结果…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div>}
 

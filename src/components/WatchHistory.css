@@ -4,10 +4,16 @@
 .history-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .history-scope { min-height: 38px; padding: 7px 30px 7px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-primary); }
 .history-hint { margin: 0 0 24px; max-width: 72ch; }
-.history-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.history-filter-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; margin-bottom: 12px; }
+.history-filter { display: flex; flex-wrap: wrap; gap: 6px; }
 .history-filter button { padding: 8px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .history-filter button:hover { background: var(--bg-hover); }
 .history-filter button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-border); }
+.history-display-option { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); cursor: pointer; }
+.history-display-option:hover { background: var(--bg-hover); }
+.history-display-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.history-display-option input { margin: 0; accent-color: var(--accent); }
+.history-display-option:has(input:disabled) { cursor: not-allowed; opacity: .6; }
 .history-list { list-style: none; padding: 0; margin: 0; }
 .history-row { border-bottom: 1px solid var(--border); padding: 16px 0; }
 .history-main { display: flex; align-items: center; gap: 12px; }
@@ -30,4 +36,4 @@
 .history-empty { padding: 64px 20px; text-align: center; color: var(--text-secondary); }
 .history-empty h2 { margin: 16px 0 8px; color: var(--text-primary); }
 .history-empty .btn { margin-top: 20px; }
-@media (max-width: 900px) { .history-header { align-items: flex-start; flex-wrap: wrap; } .history-resume { gap: 12px; } .history-sequels { padding-left: 8px; } .history-main { align-items: flex-start; } .history-row-actions { flex-direction: column; } }
+@media (max-width: 900px) { .history-header { align-items: flex-start; flex-wrap: wrap; } .history-filter-bar { align-items: flex-start; flex-direction: column; } .history-resume { gap: 12px; } .history-sequels { padding-left: 8px; } .history-main { align-items: flex-start; } .history-row-actions { flex-direction: column; } }

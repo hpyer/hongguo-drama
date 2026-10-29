@@ -70,6 +70,7 @@ async function mount(file, api, props = {}, storage = null) {
     cache.set(resolved, module);
     const localRequire = (spec) => {
       if (spec === 'react' || spec === 'react/jsx-runtime' || spec === 'react/jsx-dev-runtime') return react;
+      if (spec === 'react-dom') return { createPortal: children => children };
       if (spec.endsWith('.css')) return {};
       if (spec.startsWith('.')) {
         const base = path.resolve(path.dirname(resolved), spec);
@@ -177,35 +178,68 @@ async function mount(file, api, props = {}, storage = null) {
   });
   await test('catalog integration page failure keeps actual page and retries without skipping', async () => {
     const { fixture, categoryPayload } = require('../../scripts/check-app-catalog.cjs');
-    let failSecond = true;
-    const h = fixture(call => {
-      if (call.body.offset === 15 && failSecond) { failSecond = false; throw Object.assign(new Error('fixture'), { code: 'ECONNRESET' }); }
-      const p = categoryPayload('7000001', call.body.offset + 15);
-      p.data.video_data[0].title = `游标${call.body.offset}片单`; return p;
-    });
-    const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: h.browse }); await ui.flush();
-    ui.button('下一页').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('加载失败'), ui.text().slice(-500));
-    assert.ok(ui.text().includes('第 1 页'), 'failed page must not relabel the old cards');
-    assert.ok(ui.text().includes('游标0片单'));
-    ui.button('下一页').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('第 2 页')); assert.ok(ui.text().includes('游标15片单'));
-    assert.equal(h.calls.at(-1).body.offset, 15, 'retry must use the failed cursor, not skip to page 3'); ui.unmount();
+    for (const action of ['重试', '下一页']) {
+      let failSecond = true;
+      const requests = [];
+      const h = fixture(call => {
+        if (call.body.offset === 15 && failSecond) { failSecond = false; throw Object.assign(new Error('fixture'), { code: 'ECONNRESET' }); }
+        const p = categoryPayload('7000001', call.body.offset + 15);
+        p.data.video_data[0].title = `游标${call.body.offset}片单`; return p;
+      });
+      const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: request => {
+        requests.push({ ...request });
+        return h.browse(request);
+      } });
+      await ui.flush();
+      ui.button('下一页').props.onClick(); await ui.flush();
+      assert.ok(ui.text().includes('加载失败'), ui.text().slice(-500));
+      assert.ok(ui.text().includes('第 1 页'), 'failed page must not relabel the old cards');
+      assert.ok(ui.text().includes('游标0片单'));
+      const beforeRetry = requests.length;
+      ui.button(action).props.onClick(); await ui.flush();
+      assert.equal(requests.length, beforeRetry + 1);
+      assert.equal(requests.at(-1).page, 2, `${action} must retry the failed page`);
+      assert.equal(requests.at(-1).forceRefresh, false, `${action} must reuse the valid App cursor`);
+      assert.ok(ui.text().includes('第 2 页')); assert.ok(ui.text().includes('游标15片单'));
+      assert.equal(h.calls.at(-1).body.offset, 15, 'retry must use the failed cursor, not skip to page 3');
+      ui.unmount();
+    }
+
+    const webRequests = [];
+    let failWebPage = true;
+    const web = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: request => {
+      webRequests.push({ ...request });
+      if (request.page === 2 && failWebPage) {
+        failWebPage = false;
+        return { success: false, error: '官网第二页失败' };
+      }
+      return { success: true, results: [{ series_id: '7000001', series_title: request.page === 2 ? '官网第二页已恢复' : `官网第${request.page}页` }], totalPages: 3 };
+    } }, {}, memoryStorage({ 'hongguo.catalog.channel.v1': 'web' }));
+    await web.flush();
+    web.find(n => n.props['aria-label'] === '下一页').props.onClick(); await web.flush();
+    assert.ok(web.text().includes('官网第二页失败'));
+    web.button('重试').props.onClick(); await web.flush();
+    assert.equal(webRequests.at(-1).page, 2, 'web retry must keep the failed page');
+    assert.equal(webRequests.at(-1).forceRefresh, true, 'web retry must bypass a cached failed page');
+    assert.ok(web.text().includes('官网第二页已恢复'));
+    web.unmount();
   });
   await test('catalog integration expired cursor keeps actual page and offers bounded first-page recovery', async () => {
     const { fixture, categoryPayload } = require('../../scripts/check-app-catalog.cjs');
-    const h = fixture(call => categoryPayload('7000001', call.body.offset + 15));
-    const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: h.browse }); await ui.flush();
-    ui.button('下一页').props.onClick(); await ui.flush(); h.advance(120001);
-    ui.button('下一页').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('第 2 页')); assert.ok(ui.text().includes('刷新片单'));
-    assert.equal(ui.button('下一页').props.disabled, true); assert.equal(ui.button('上一页').props.disabled, true);
-    const requests = h.calls.length;
-    ui.button('刷新片单').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('第 1 页')); assert.ok(!ui.text().includes('加载失败'));
-    assert.equal(h.calls.length, requests + 1, 'recovery must fetch only page 1');
-    ui.button('下一页').props.onClick(); await ui.flush();
-    assert.ok(ui.text().includes('第 2 页')); ui.unmount();
+    for (const action of ['重试', '刷新片单']) {
+      const h = fixture(call => categoryPayload('7000001', call.body.offset + 15));
+      const ui = await mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: h.browse }); await ui.flush();
+      ui.button('下一页').props.onClick(); await ui.flush(); h.advance(120001);
+      ui.button('下一页').props.onClick(); await ui.flush();
+      assert.ok(ui.text().includes('第 2 页')); assert.ok(ui.text().includes('刷新片单'));
+      assert.equal(ui.button('下一页').props.disabled, true); assert.equal(ui.button('上一页').props.disabled, true);
+      const requests = h.calls.length;
+      ui.button(action).props.onClick(); await ui.flush();
+      assert.ok(ui.text().includes('第 1 页')); assert.ok(!ui.text().includes('加载失败'));
+      assert.equal(h.calls.length, requests + 1, `${action} recovery must fetch only page 1`);
+      ui.button('下一页').props.onClick(); await ui.flush();
+      assert.ok(ui.text().includes('第 2 页')); ui.unmount();
+    }
   });
   await test('catalog integration cancelled or timed-out next page stays retryable and ignores late cards', async () => {
     for (const stop of ['cancel', 'timeout']) {
@@ -841,6 +875,98 @@ async function mount(file, api, props = {}, storage = null) {
     ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'xifan' } }); await ui.flush();
     assert.equal(ui.find(n => n.props['aria-label'] === '红果目录线路'), undefined);
     assert.equal(calls.at(-1).catalogChannel, undefined, 'other providers must not receive the Hongguo route');
+    ui.unmount();
+  });
+  await test('browse forced catalog refresh reports recovery and isolates stale results', async () => {
+    const { fixture, categoryPayload, rankPayload } = require('../../scripts/check-app-catalog.cjs');
+    let mode = 'ok', resolveLate;
+    const rankPage = call => {
+      const payload = rankPayload('hot-drama');
+      payload.data.next_offset = Number(call.values?.offset || 0) + 29;
+      return payload;
+    };
+    const h = fixture(call => {
+      if (mode === 'fail') throw Object.assign(new Error('fixture reset'), { code: 'ECONNRESET' });
+      if (mode === 'late') return new Promise(resolve => { resolveLate = () => resolve(rankPage(call)); });
+      if (mode === 'hang') return new Promise(() => {});
+      if (mode === 'changed') {
+        const payload = rankPage(call);
+        payload.data.cell_view.cell_data[0].video_data.series_id = '7697209269287914522';
+        payload.data.cell_view.cell_data[0].video_data.title = '更新后的短剧';
+        return payload;
+      }
+      return call.url.includes('/bookmall/') ? rankPage(call) : categoryPayload('7000001', 37, true, 1);
+    });
+    const requests = [];
+    const ui = await mount('Browse', {
+      getSeriesList: async () => [],
+      browseCategories: async () => [{ slug: 'real-drama', label: '真人剧' }, { slug: 'hot-drama', label: '综合热播榜' }],
+      browseList: request => {
+        requests.push({ ...request });
+        return request.source === 'xifan'
+          ? Promise.resolve({ success: true, results: [{ series_id: 'xifan:A:1', series_title: '西饭片单' }], genres: [] })
+          : h.browse(request);
+      },
+    });
+    await ui.flush();
+    ui.button('综合热播榜').props.onClick(); await ui.flush();
+    ui.button('下一页').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('第 2 页'), ui.text().slice(-800));
+    const beforeRefresh = h.calls.length;
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.equal(requests.at(-1).forceRefresh, true, 'the user refresh must bypass the App catalog cache');
+    assert.equal(h.calls.length, beforeRefresh + 1, 'the forced refresh must issue one current first-page request');
+    assert.ok(ui.text().includes('已重新获取 1 部短剧，已返回第一页。'), 'a later-page refresh needs explicit first-page feedback');
+    assert.ok(ui.text().includes('第 1 页'));
+    assert.ok(ui.text().includes('测试 & 剧'), 'the existing cards must remain visible after an unchanged refresh');
+    const beforeNext = h.calls.length;
+    ui.button('下一页').props.onClick(); await ui.flush();
+    assert.equal(h.calls.length, beforeNext + 1);
+    assert.equal(h.calls.at(-1).values.offset, '29', 'the refreshed first page must expose its new cursor');
+    assert.ok(ui.text().includes('第 2 页'));
+
+    mode = 'fail';
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('失败'), 'a failed refresh must show the existing error');
+    assert.ok(!ui.text().includes('已重新获取'), 'a failed refresh must clear the older success notice');
+    assert.ok(ui.text().includes('测试 & 剧'), 'the old page must remain visible after a failed refresh');
+
+    mode = 'ok';
+    await ui.button('重试').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('已重新获取 1 部短剧，已返回第一页。'), 'retry after a failed later-page refresh must retain first-page context');
+    const beforeSamePage = h.calls.length;
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.equal(h.calls.length, beforeSamePage + 1);
+    assert.ok(ui.text().includes('刷新完成：来源榜单顺序未变化（1 部）。'), 'a same-page refresh with unchanged source order needs explicit feedback');
+    mode = 'changed';
+    await ui.button('刷新片单').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('刷新完成：片单已更新（1 部）。'), 'a changed result must report the successful update');
+    assert.ok(ui.text().includes('更新后的短剧'));
+    mode = 'ok';
+    ui.button('下一页').props.onClick(); await ui.flush();
+    mode = 'late';
+    ui.button('刷新片单').props.onClick();
+    ui.render();
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(typeof resolveLate, 'function', 'the late refresh must reach the App catalog');
+    ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'xifan' } });
+    await ui.flush();
+    resolveLate();
+    await ui.flush();
+    assert.ok(ui.text().includes('西饭片单'));
+    assert.ok(!ui.text().includes('已重新获取'), 'a late response must not restore success feedback after switching source');
+
+    mode = 'ok';
+    ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'hongguo' } });
+    await ui.flush();
+    mode = 'hang';
+    ui.button('刷新片单').props.onClick();
+    ui.render();
+    await Promise.resolve(); await Promise.resolve();
+    h.advance(4000);
+    await ui.flush();
+    assert.ok(ui.text().includes('App 目录加载超时'));
+    assert.ok(!ui.text().includes('已重新获取'), 'a timeout must not leave success feedback behind');
     ui.unmount();
   });
   await test('browse catalog route switching isolates late replies and remembers the web preference', async () => {

@@ -102,7 +102,7 @@ async function runInstallerCheck() {
   }
 
   async function launch(expectedVersion = pkg.version) {
-    child = spawn(exe, ['--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9440'], { stdio: 'ignore' });
+    child = spawn(exe, ['--mute-audio', '--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9440'], { stdio: 'ignore' });
     let launchError;
     child.once('error', error => { launchError = error; });
     let target;
