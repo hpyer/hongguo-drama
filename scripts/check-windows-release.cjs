@@ -61,6 +61,8 @@ async function clickControl(label) {
   delete result.stage;
 }
 async function keyHandoff(key, code, expectedSource) {
+  result.stage = 'shortcut-handoff-' + key;
+  await cdp('Page.bringToFront');
   assert(await evaluate('!document.querySelector("video").paused && getComputedStyle(document.querySelector(".player-controls")).opacity === "0"'), 'Key handoff must begin during hidden-controls playback');
   await evaluate(`(() => {
     const video = document.querySelector('video');
@@ -75,8 +77,7 @@ async function keyHandoff(key, code, expectedSource) {
       const deadline = performance.now() + 8000;
       try {
         while (performance.now() < deadline) {
-          await new Promise(requestAnimationFrame);
-          result.frames++;
+          if (await window.__verificationNextFrame()) result.frames++;
           const controls = getComputedStyle(document.querySelector('.player-controls'));
           if (Number(controls.opacity) > 0 || controls.pointerEvents !== 'none') result.visibleFrames++;
           if (document.fullscreenElement !== document.querySelector('.player-stage')) result.fullscreenLost = true;
@@ -85,6 +86,7 @@ async function keyHandoff(key, code, expectedSource) {
           if (result.nextPlaying) break;
         }
         result.source = video.currentSrc;
+        result.visibility = document.visibilityState;
         return result;
       } finally {
         window.removeEventListener('keydown', keydown, true);
@@ -99,6 +101,7 @@ async function keyHandoff(key, code, expectedSource) {
   assert(state.trusted && !state.ended && state.sourceChanged && state.nextPlaying, 'Real shortcut must switch without natural ended: ' + JSON.stringify(state));
   assert(state.frames > 0 && state.visibleFrames === 0 && !state.fullscreenLost, 'Shortcut must retain hidden controls/fullscreen every sampled frame: ' + JSON.stringify(state));
   if (expectedSource) assert.equal(state.source, expectedSource, key + ' must select the expected episode');
+  delete result.stage;
   return state;
 }
 
@@ -225,7 +228,9 @@ async function realFootage(mediaDir, ffmpeg) {
   }
   // Keep remote notices from covering trusted pointer playback checks in this disposable profile.
   fs.writeFileSync(path.join(profile, 'data.json'), JSON.stringify({ announcement: { preferences: { normalEnabled: false, emergencyEnabled: false } }, settings: { root: mediaDir, watch_updates_enabled: false, watch_sequels_enabled: false, cache_next_episode: false }, tasks: fixtureEpisodes, series: skipPlayback ? [] : [{ series_id: sid, series_title: 'Windows verification', episodes: fixtureEpisodes.map(task => ({ ...task.hongguoInfo, title: 'Real Hongguo acceptance footage' })) }] }));
-  child = spawn(portable, ['--mute-audio', '--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9439', '--autoplay-policy=no-user-gesture-required'], { stdio: 'ignore' });
+  child = spawn(portable, ['--mute-audio', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows', '--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=9439', '--autoplay-policy=no-user-gesture-required'], { stdio: 'ignore' });
   let target;
   for (let i = 0; i < 150; i++) {
     try { target = (await (await fetch('http://127.0.0.1:9439/json')).json()).find(t => t.type === 'page' && t.url.startsWith('file:')); } catch {}
@@ -236,6 +241,14 @@ async function realFootage(mediaDir, ffmpeg) {
   socket = new WebSocket(target.webSocketDebuggerUrl);
   attachCdpResponses(socket);
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
+  await cdp('Page.bringToFront');
+  await evaluate(`(() => {
+    window.__verificationNextFrame = () => new Promise(resolve => {
+      const timer = setTimeout(() => { cancelAnimationFrame(frame); resolve(false); }, 100);
+      const frame = requestAnimationFrame(() => { clearTimeout(timer); resolve(true); });
+    });
+    return true;
+  })()`);
   for (let i = 0; i < 50; i++) {
     if (await evaluate('Boolean(window.electronAPI && document.querySelector("#root")?.children.length)')) break;
     await delay(100);
@@ -392,6 +405,7 @@ async function realFootage(mediaDir, ffmpeg) {
   const shortcutScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(out, 'portable-windows-shortcut-hidden.png'), Buffer.from(shortcutScreenshot.data, 'base64'));
   result.checks.push('Actual single-file EXE: trusted default ArrowDown/ArrowUp and custom J/K switch episodes without ended; expected episode returns; every sampled frame retains hidden controls and fullscreen');
+  result.stage = 'automatic-handoff-frame-sampling';
   const automaticHandoff = await evaluate(`(async () => {
     const video = document.querySelector('video');
     const originalSource = video.currentSrc;
@@ -403,8 +417,7 @@ async function realFootage(mediaDir, ffmpeg) {
     const deadline = performance.now() + 8000;
     try {
       while (performance.now() < deadline) {
-        await new Promise(requestAnimationFrame);
-        result.frames++;
+        if (await window.__verificationNextFrame()) result.frames++;
         const controls = getComputedStyle(document.querySelector('.player-controls'));
         if (Number(controls.opacity) > 0 || controls.pointerEvents !== 'none') result.visibleFrames++;
         if (document.fullscreenElement !== document.querySelector('.player-stage')) result.fullscreenLost = true;
@@ -420,6 +433,7 @@ async function realFootage(mediaDir, ffmpeg) {
   assert(automaticHandoff.frames > 0 && automaticHandoff.visibleFrames === 0 && !automaticHandoff.fullscreenLost, 'Automatic next episode must keep fullscreen controls hidden: ' + JSON.stringify(automaticHandoff));
   assert.equal(automaticHandoff.source, down.source, 'Automatic next after default ArrowUp must select the following episode');
   result.automaticHandoff = automaticHandoff;
+  delete result.stage;
   const handoffScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(out, 'portable-windows-auto-next-hidden.png'), Buffer.from(handoffScreenshot.data, 'base64'));
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 120, y: 120 });
