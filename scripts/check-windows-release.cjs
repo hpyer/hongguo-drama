@@ -126,7 +126,7 @@ async function realFootage(mediaDir, ffmpeg) {
     const sample = path.join(mediaDir, `windows-sample-${index + 1}.mp4`);
     const key = info.contentKey || (info.spadeA ? native.deriveKey(info.spadeA)?.toString('hex') : '');
     const decoded = spawnSync(ffmpeg, ['-y', '-v', 'error', ...(key ? ['-decryption_key', key] : []),
-      '-i', encrypted, '-t', '15', '-map', '0:v:0', '-map', '0:a:0', '-vf', 'scale=640:360',
+      '-i', encrypted, '-t', '15', '-map', '0:v:0', '-map', '0:a:0', '-vf', 'scale=640:-2,setsar=1',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', sample],
       { timeout: 60000, windowsHide: true, stdio: 'pipe' });
     assert.equal(decoded.status, 0, 'Real Hongguo acceptance video could not be decoded');
@@ -210,10 +210,14 @@ async function realFootage(mediaDir, ffmpeg) {
   let fixtureEpisodes = [];
   if (!skipPlayback) {
     const samples = await realFootage(mediaDir, ffmpeg);
+    result.realMedia.samples = [];
     for (const sample of samples) {
       const probe = JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_streams', '-of', 'json', sample], { encoding: 'utf8', windowsHide: true }));
       assert(probe.streams.some(s => s.codec_name === 'h264'));
       assert(probe.streams.some(s => s.codec_name === 'aac'));
+      const video = probe.streams.find(s => s.codec_type === 'video');
+      assert(video.width === 640 && video.height > 0);
+      result.realMedia.samples.push({ width: video.width, height: video.height });
     }
     result.checks.push('Bundled FFmpeg decodes two real downloaded Hongguo episodes to H.264/AAC; FFprobe reads output');
     fixtureEpisodes = samples.map((savePath, index) => ({ id: `fixture-${index + 1}`, status: 'completed', savePath, hongguoInfo: { series_id: sid, series_title: 'Windows verification', vid: `fixture-${index + 1}`, vid_index: index + 1 } }));
@@ -327,7 +331,8 @@ async function realFootage(mediaDir, ffmpeg) {
     }
     throw new Error('Player did not advance past 0.5s within 12s: ' + JSON.stringify(window.__windowsPlaybackProbe));
   })()`);
-  assert(played.time > 0.5 && played.width === 640 && played.height === 360, JSON.stringify(played));
+  assert(played.time > 0.5 && played.width === result.realMedia.samples[0].width
+    && played.height === result.realMedia.samples[0].height, JSON.stringify(played));
   result.playback = played;
   delete result.stage;
   const canvasRead = await evaluate(`(() => {
